@@ -1,0 +1,39 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "aorandra-app",
+          "appId": "1:900884849514:android:b0e16962268b3477767b13",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "aorandra-app",
+          "configurations": {
+            "android": "1:900884849514:android:b0e16962268b3477767b13",
+            "ios": "1:900884849514:ios:e234aa7906b91312767b13",
+            "macos": "1:900884849514:ios:e234aa7906b91312767b13",
+            "web": "1:900884849514:web:9cd92df3675d2e77767b13",
+            "windows": "1:900884849514:web:68a716e0d406f200767b13"
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ]
+    }
+  ]
+}

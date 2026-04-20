@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "107320728973",
+    "project_id": "vivona-app",
+    "storage_bucket": "vivona-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:107320728973:android:790e23f75eb4c87fd031c4",
+        "android_client_info": {
+          "package_name": "com.aorandra.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDZtiPakIHO1PjOYd02ZITOUKkZ_1WVYHg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
