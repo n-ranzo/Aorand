@@ -23,12 +23,12 @@ class OtpService {
       Uri.parse("https://api.emailjs.com/api/v1.0/email/send"),
       headers: {
         'Content-Type': 'application/json',
-        'origin': 'http://localhost',
+        'origin': 'http://localhost', // 🔥 مهم جداً
       },
       body: jsonEncode({
         "service_id": serviceId,
         "template_id": templateId,
-        "profile_id": publicKey,
+        "user_id": publicKey,
         "template_params": {
           "to_email": email,
           "code": code,

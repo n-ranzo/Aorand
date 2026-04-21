@@ -4,11 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../../core/ui/ui_controller.dart';
-import '../../../core/utils/glass_container.dart';
-import '../../../shared/widgets/glass_button.dart';
+import '../../../../core/ui/ui_controller.dart';
+import '../../../../core/utils/glass_container.dart';
+import '../../../../shared/widgets/glass_button.dart';
 import 'widgets/password_rules.dart';
-import '../ui/login_screen.dart';
+import 'login_screen.dart';
 import '../data/otp_service.dart';
 
 class ResetPasswordScreen extends StatefulWidget {

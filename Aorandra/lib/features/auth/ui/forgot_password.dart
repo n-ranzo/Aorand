@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../../core/ui/ui_controller.dart';
-import '../../../shared/widgets/glass_button.dart';
-import '../../../core/utils/glass_container.dart';
+import '../../../../core/ui/ui_controller.dart';
+import '../../../../shared/widgets/glass_button.dart';
+import '../../../../core/utils/glass_container.dart';
 import '../data/otp_service.dart';
 import 'reset_password_screen.dart';
 

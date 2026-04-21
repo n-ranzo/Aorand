@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'login_screen.dart';
-import '../../home/ui/home_screen.dart';
+import 'package:aorandra/features/home/ui/home_screen.dart';
 
 class AuthGate extends StatelessWidget {
   const AuthGate({super.key});

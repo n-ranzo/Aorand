@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'widgets/video_item.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:aorandra/features/comments/ui/comments_screen.dart';
+import 'package:aorandra/shared/widgets/glass_button.dart';
 
 
 
@@ -547,8 +548,8 @@ Widget _buildRightActions(Map video) {
     bottom: 56,
     child: FutureBuilder(
       future: supabase
-          .from('profiles') // ✅ FIXED
-          .select('username, avatar_url') // ✅ FIXED
+          .from('profiles')
+          .select('username, avatar_url')
           .eq('id', video['profile_id'])
           .single(),
       builder: (context, snapshot) {
@@ -558,7 +559,7 @@ Widget _buildRightActions(Map video) {
         if (snapshot.hasData) {
           final data = snapshot.data as Map;
           username = data['username'] ?? "User";
-          avatar = data['avatar_url']; // ✅ FIXED
+          avatar = data['avatar_url'];
         }
 
         return Column(
@@ -605,10 +606,34 @@ Widget _buildRightActions(Map video) {
 
                 const SizedBox(width: 10),
 
-                // FOLLOW OR EMPTY SPACE
+                // ================= FOLLOW BUTTON =================
                 isMe
                     ? const SizedBox(width: 70)
-                    : _glassFollowButton(video['profile_id']),
+                    : GlassButton(
+                        text: followingUsers.contains(video['profile_id'])
+                            ? "Following"
+                            : "Follow",
+
+                        isActive:
+                            followingUsers.contains(video['profile_id']),
+
+                        width: 70,
+                        height: 24,
+                        fontSize: 10,
+
+                        onPressed: () {
+                          setState(() {
+                            if (followingUsers
+                                .contains(video['profile_id'])) {
+                              followingUsers
+                                  .remove(video['profile_id']);
+                            } else {
+                              followingUsers
+                                  .add(video['profile_id']);
+                            }
+                          });
+                        },
+                      ),
               ],
             ),
 
@@ -728,50 +753,6 @@ Widget _buildRightActions(Map video) {
                 ),
               ),
             ],
-          ),
-        ),
-      ),
-    ),
-  );
-}
-  // ================================
-  // UI BUILDERS - HELPERS
-  // ================================
-
-  
-
-  /// Glassmorphism Follow Button
-  Widget _glassFollowButton(String userId) {
-  final isFollowing = followingUsers.contains(userId);
-
-  return GestureDetector(
-    onTap: () {
-      setState(() {
-        if (isFollowing) {
-          followingUsers.remove(userId);
-        } else {
-          followingUsers.add(userId);
-        }
-      });
-    },
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.10),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white.withOpacity(0.30)),
-          ),
-          child: Text(
-            isFollowing ? "Following" : "Follow",
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-            ),
           ),
         ),
       ),

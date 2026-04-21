@@ -4,6 +4,8 @@ import 'package:aorandra/features/home/logic/home_controller.dart';
 import 'package:aorandra/shared/services/user_manager.dart';
 import 'package:video_player/video_player.dart';
 import 'package:aorandra/core/widgets/time_text.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../shared/widgets/glass_button.dart';
 
 /// =============================================
 /// FEED WIDGET
@@ -20,16 +22,19 @@ class FeedWidget extends StatelessWidget {
   final Map<String, bool> savePosts;
   final Map<String, int> likesCount;
   final Map<String, int> commentsCount;
+  final Map<String, bool> followingUsers;
 
  
   // ================= PAGE CONTROL =================
   final Map<String, PageController> pageControllers;
   final Map<String, ValueNotifier<int>> pageIndexes;
 
+
   // ================= ACTIONS =================
   final Future<void> Function() onRefresh;
   final VoidCallback onLoadComments;
 
+  final Future<void> Function(String userId) onFollow;
   final Future<void> Function(Map<String, dynamic> post) onLike;
   final Future<void> Function(String postId) onSave;
   final Future<void> Function(String postId) onOpenComments;
@@ -58,6 +63,8 @@ class FeedWidget extends StatelessWidget {
     required this.onShare,
     required this.onOpenProfile,
     required this.onOpenMenu,
+    required this.onFollow,
+    required this.followingUsers,
   });
 
   @override
@@ -116,6 +123,9 @@ Widget build(BuildContext context) {
                       UserManager.instance.getUsername(userId);
                   final avatar =
                       UserManager.instance.getAvatar(userId);
+
+                  final currentUserId =
+                      Supabase.instance.client.auth.currentUser?.id;
 
                   // Skip invalid posts
                   if (userId.isEmpty || postId.isEmpty) {
@@ -182,18 +192,39 @@ Widget build(BuildContext context) {
 
                             const Spacer(),
 
-                            IconButton(
-                              icon: Icon(Icons.more_horiz,
-                                  color: theme.iconTheme.color),
-                              onPressed: () => onOpenMenu(
-                                postId,
-                                userId,
-                                post['caption'] ?? '',
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                          Row(
+                             children: [
+
+                              /// FOLLOW BUTTON
+                              if (currentUserId != userId)
+                                GlassButton(
+                                  text: followingUsers[userId] == true ? "Following" : "Follow",
+                                  isActive: followingUsers[userId] == true,
+
+                                  width: 70,
+                                  height: 24,
+                                  fontSize: 10,
+
+                                  onPressed: () => onFollow(userId),
+                                ),
+
+                               const SizedBox(width: 8),
+
+                              /// MENU BUTTON
+                              IconButton(
+                                icon: Icon(Icons.more_horiz,
+                                    color: theme.iconTheme.color),
+                                onPressed: () => onOpenMenu(
+                                  postId,
+                                  userId,
+                                  post['caption'] ?? '',
+                               ),
+                             ),
+                           ],
+                         )
+                       ],
+                     ),
+                   ),
 
                       // ================= MEDIA =================
                       SizedBox(

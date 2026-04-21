@@ -3,11 +3,11 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../../core/ui/ui_controller.dart';
-import '../../../shared/widgets/glass_button.dart';
-import '../../../core/utils/glass_container.dart';
+import '../../../../core/ui/ui_controller.dart';
+import '../../../../shared/widgets/glass_button.dart';
+import '../../../../core/utils/glass_container.dart';
 import 'widgets/password_rules.dart';
-import '../../home/ui/home_screen.dart';
+import 'package:aorandra/features/home/ui/home_screen.dart';
 
 // ================================
 // SIGNUP SCREEN

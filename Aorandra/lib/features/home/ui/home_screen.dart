@@ -122,6 +122,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, bool> likedPosts = {};
   Map<String, int> likesCount = {};
   Map<String, int> commentsCount = {};
+  Map<String, bool> followingUsers = {};
 
   // PAGE CONTROLLERS 
   final Map<String, PageController> pageControllers = {};
@@ -284,6 +285,29 @@ Future<void> _handleLike(Map post) async {
         likesCount[postId] = (likesCount[postId] ?? 1) - 1;
       }
     });
+  }
+}
+
+Future<void> _handleFollow(String targetId) async {
+  final String? userId = supabase.auth.currentUser?.id;
+
+  // Validate current user
+  if (userId == null) return;
+
+  try {
+    // ================= OPTIMISTIC UI UPDATE =================
+    setState(() {
+      followingUsers[targetId] = !(followingUsers[targetId] ?? false);
+    });
+
+    // ================= SYNC WITH DATABASE =================
+    await InteractionService.toggleFollow(
+      userId: userId,
+      targetId: targetId,
+    );
+
+  } catch (error) {
+    debugPrint("Follow error: $error");
   }
 }
 
@@ -1133,6 +1157,9 @@ Widget buildFeed() {
     onShare: _openShareSheet,
     onOpenProfile: _goToProfile,
     onOpenMenu: _openPostMenu,
+
+    onFollow: _handleFollow,
+    followingUsers: followingUsers,
   );
 }
   // ================================
