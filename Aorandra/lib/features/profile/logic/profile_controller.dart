@@ -1,31 +1,132 @@
-class ProfileController {
+import 'package:get/get.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../data/profile_service.dart';
 
-  static double storyPlusSize = 26;
-  static double storyPlusRadius = 13;
+class ProfileController extends GetxController {
 
-  static double floatOffset = -2;
+  final supabase = Supabase.instance.client;
 
-  // ===== Header Icons =====
-  static double addTop = 0;
-  static double addLeft = 0;
+  /// ================================
+  /// STATE
+  /// ================================
 
-  static double settingsTop = 0;
-  static double settingsRight = 0;
+  /// User data
+  final RxMap<String, dynamic> user = <String, dynamic>{}.obs;
 
-  static double headerSize = 42;
+  /// Image posts
+  final RxList<Map<String, dynamic>> posts = <Map<String, dynamic>>[].obs;
 
-  static double iconSize = 24;
+  /// Video posts (Aoris)
+  final RxList<Map<String, dynamic>> videos = <Map<String, dynamic>>[].obs;
 
-  // ===== Buttons =====
-  static double buttonHeight = 40;
-  static double buttonRadius = 20;
-  static double buttonsTop = 0;
-  static double buttonsScale = 1;
+  /// Loading state
+  final RxBool isLoading = true.obs;
 
-  // ===== Empty =====
-  static double emptyCircle = 90;
-  static double emptyIcon = 28;
-  static double emptyTop = 0;
-  static double emptyScale = 1;
+  /// Current tab index
+  final RxInt currentTab = 0.obs;
 
+
+  /// ================================
+  /// LOAD PROFILE
+  /// ================================
+  Future<void> loadProfile(String userId) async {
+    try {
+      isLoading.value = true;
+
+      final userData = await ProfileService.getUser(userId);
+      final postData = await ProfileService.getPosts(userId);
+      final videoData = await ProfileService.getVideos(userId);
+
+      user.value = userData;
+      posts.value = postData;
+      videos.value = videoData;
+
+    } catch (e) {
+      print("Profile load error: $e");
+    }
+
+    isLoading.value = false;
+  }
+
+
+  /// ================================
+  /// REFRESH PROFILE
+  /// ================================
+  Future<void> refreshProfile(String userId) async {
+    await loadProfile(userId);
+  }
+
+
+  /// ================================
+  /// FOLLOW USER
+  /// ================================
+  Future<void> follow({
+    required String currentUserId,
+    required String targetUserId,
+  }) async {
+    try {
+      await ProfileService.followUser(
+        currentUserId: currentUserId,
+        targetUserId: targetUserId,
+      );
+
+      /// Update UI instantly
+      user['followers'] = (user['followers'] ?? 0) + 1;
+
+    } catch (e) {
+      print("Follow error: $e");
+    }
+  }
+
+
+  /// ================================
+  /// UNFOLLOW USER
+  /// ================================
+  Future<void> unfollow({
+    required String currentUserId,
+    required String targetUserId,
+  }) async {
+    try {
+      await ProfileService.unfollowUser(
+        currentUserId: currentUserId,
+        targetUserId: targetUserId,
+      );
+
+      /// Update UI instantly
+      user['followers'] =
+          ((user['followers'] ?? 0) - 1).clamp(0, 999999);
+
+    } catch (e) {
+      print("Unfollow error: $e");
+    }
+  }
+
+
+  /// ================================
+  /// CHECK IF FOLLOWING
+  /// ================================
+  bool isFollowing(String currentUserId) {
+    final followersList = user['followersList'] ?? [];
+    return followersList.contains(currentUserId);
+  }
+
+
+  /// ================================
+  /// CHANGE TAB
+  /// ================================
+  void changeTab(int index) {
+    currentTab.value = index;
+  }
+
+
+  /// ================================
+  /// CLEAR DATA (on logout)
+  /// ================================
+  void clearProfile() {
+    user.clear();
+    posts.clear();
+    videos.clear();
+    isLoading.value = true;
+    currentTab.value = 0;
+  }
 }

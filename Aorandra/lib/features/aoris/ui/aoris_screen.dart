@@ -1,8 +1,9 @@
 // lib/screens/aoris/aoris_screen.dart
-
+import 'package:get/get.dart';
 import 'dart:math' as math;
 import 'dart:ui';
 
+import 'package:aorandra/controller/like_controller.dart';
 import 'package:flutter/material.dart';
 
 import 'widgets/video_item.dart';
@@ -54,7 +55,6 @@ class _AorisScreenState extends State<AorisScreen>
   late final AnimationController _floatingController;
   late final AnimationController _vinylController;
 
-  Set<String> likedVideos = {};
    Set<String> saveedVideo = {};
     Set<String> followingUsers = {};
 
@@ -108,81 +108,26 @@ Future<void> loadVideos() async {
       .select()
       .order('created_at', ascending: false);
 
-  final likesData = await supabase
-      .from('likes')
-      .select('post_id')
-      .eq('profile_id', userId);
-
-  final likedIds = likesData
-      .map<String>((e) => e['post_id'].toString())
-      .toSet();
-
-  
-  for (var video in videoData) {
-    final count = await supabase
-        .from('likes')
-        .select()
-        .eq('post_id', video['id']);
-
-    video['likes_count'] = count.length;
-  }
-
   setState(() {
     videos = List<Map<String, dynamic>>.from(videoData);
-    likedVideos = likedIds;
     isLoading = false;
   });
-}
 
-Future<void> _toggleLike(Map video) async {
-  final supabase = Supabase.instance.client;
-  final userId = supabase.auth.currentUser!.id;
+  /// Load like state and counts using LikeController (single source of truth)
+  final likeController = Get.find<LikeController>();
 
-  final String videoId = video['id'];
-  final bool isLiked = likedVideos.contains(videoId);
+  for (var video in videos) {
+    final postId = video['id'].toString();
 
-  // UI + COUNT 
-  setState(() {
-    if (isLiked) {
-      likedVideos.remove(videoId);
-      video['likes_count'] = (video['likes_count'] ?? 0) - 1;
-    } else {
-      likedVideos.add(videoId);
-      video['likes_count'] = (video['likes_count'] ?? 0) + 1;
+    // Avoid reloading if already موجود
+    if (likeController.likesCount[postId] == null) {
+      likeController.loadLikeState(
+        profileId: userId,
+        postId: postId,
+      );
+
+      likeController.loadLikesCount(postId);
     }
-  });
-
-  try {
-    if (isLiked) {
-      await supabase
-          .from('likes')
-          .delete()
-          .eq('post_id', videoId)
-          .eq('profile_id', userId);
-
-      await supabase
-          .from('aoris')
-          .update({
-            'likes_count': video['likes_count'],
-          })
-          .eq('id', videoId);
-
-    } else {
-      await supabase.from('likes').insert({
-        'post_id': videoId,
-        'profile_id': userId,
-      });
-
-      await supabase
-          .from('aoris')
-          .update({
-            'likes_count': video['likes_count'],
-          })
-          .eq('id', videoId);
-    }
-
-  } catch (e) {
-    print("LIKE ERROR: $e");
   }
 }
 
@@ -253,6 +198,8 @@ void _repost(Map video) {
 
   @override
 Widget build(BuildContext context) {
+   final likeController = Get.find<LikeController>();
+
   return Scaffold(
     backgroundColor: Colors.black,
     body: Stack(
@@ -293,7 +240,7 @@ Widget build(BuildContext context) {
                   const _TopGradientOverlay(),
                   const _BottomGradientOverlay(),
 
-                  _buildRightActions(video),
+                  _buildRightActions(video, likeController),
                   _buildBottomInfo(video),
                   _buildMusicVinyl(video),
                 ],
@@ -362,16 +309,13 @@ Widget build(BuildContext context) {
   // UI BUILDERS - RIGHT ACTIONS
   // ================================
 
-Widget _buildRightActions(Map video) {
+Widget _buildRightActions(Map video, LikeController likeController) {
   final String videoId = video['id'];
 
   final supabase = Supabase.instance.client;
   final currentUserId = supabase.auth.currentUser!.id;
 
   final isMe = video['profile_id'] == currentUserId;
-
-  final int likesCount = video['likes_count'] ?? 0;
-  final bool isLiked = likedVideos.contains(videoId);
 
   return Positioned(
     right: 10,
@@ -381,26 +325,47 @@ Widget _buildRightActions(Map video) {
       children: [
 
         // ================= ❤️ LIKE =================
-        GestureDetector(
-          onTap: () => _toggleLike(video),
-          child: Column(
-            children: [
-              Icon(
-                isLiked ? Icons.favorite : Icons.favorite_border,
-                color: isLiked ? Colors.red : Colors.white,
-                size: 26,
-              ),
-              const SizedBox(height: 4),
-              Text(
-                "$likesCount",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                ),
-              ),
-            ],
+       GestureDetector(
+  onTap: () {
+    final postId = video['id'].toString();
+
+    if (likeController.loadingLikes.contains(postId)) return;
+
+    likeController.toggleLike(
+      profileId: Supabase.instance.client.auth.currentUser!.id,
+      postId: postId,
+      ownerId: video['profile_id'],
+    );
+  },
+
+  child: Obx(() {
+    final postId = video['id'].toString();
+
+    final isLiked =
+        likeController.likedPosts[postId] == true;
+
+    final likesCount =
+        likeController.likesCount[postId] ?? 0;
+
+    return Column(
+      children: [
+        Icon(
+          isLiked ? Icons.favorite : Icons.favorite_border,
+          color: isLiked ? Colors.red : Colors.white,
+          size: 26,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          "$likesCount",
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 11,
           ),
         ),
+      ],
+    );
+  }),
+),
 
         const SizedBox(height: 14),
 

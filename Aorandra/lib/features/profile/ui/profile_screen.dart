@@ -1,7 +1,7 @@
 // lib/screens/profile/profile_screen.dart
 
 import 'dart:io';
-
+import 'package:get/get.dart';
 import 'package:aorandra/shared/services/user_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -18,6 +18,8 @@ import 'package:aorandra/core/utils/glass_container.dart';
 import 'package:aorandra/features/profile/ui/edit_profile_screen.dart';
 import 'package:aorandra/features/settings/ui/settings_screen.dart';
 import 'package:aorandra/features/chat/ui/chat_list_screen.dart';
+import 'package:aorandra/core/constants/profile_ui.dart';
+import 'package:aorandra/features/profile/ui/profile_feed_screen.dart';
 
 // ================================
 // ENUMS
@@ -79,10 +81,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // ================================
 
   @override
-  void initState() {
-    super.initState();
-    _currentUserId = _supabase.auth.currentUser!.id;
-  }
+void initState() {
+  super.initState();
+
+  _currentUserId = _supabase.auth.currentUser!.id;
+
+  final controller = Get.put(ProfileController());
+  controller.loadProfile(widget.userId);
+}
 
   // ================================
   // IMAGE UPLOAD
@@ -443,6 +449,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  
+
   /// Build action item for bottom sheet
   Widget _sheetAction({
     required String text,
@@ -507,100 +515,296 @@ class _ProfileScreenState extends State<ProfileScreen> {
 Widget build(BuildContext context) {
   final theme = Theme.of(context);
 
+  final controller = Get.find<ProfileController>();
+
   return DefaultTabController(
     length: 5,
     child: Scaffold(
       backgroundColor: theme.scaffoldBackgroundColor,
-      body: StreamBuilder<List<Map<String, dynamic>>>(
-        stream: _supabase
-            .from('profiles')
-            .stream(primaryKey: ['id'])
-            .eq('id', widget.userId),
-        builder: (context, snapshot) {
-          // ================= LOADING =================
-          if (!snapshot.hasData) {
-            return const SafeArea(
-              child: Center(
-                child: CircularProgressIndicator(),
+
+      body: Obx(() {
+        /// ================= LOADING =================
+        if (controller.isLoading.value) {
+          return const Center(
+            child: CircularProgressIndicator(),
+          );
+        }
+
+        final userData = controller.user;
+
+        /// ================= NO USER =================
+        if (userData.isEmpty) {
+          return const Center(
+            child: Text('User not found'),
+          );
+        }
+
+        UserManager.instance.setUsers([userData]);
+
+        /// ================= MAIN UI =================
+        return NestedScrollView(
+          headerSliverBuilder: (context, innerBoxIsScrolled) {
+            return [
+              SliverToBoxAdapter(
+                child: SafeArea(
+                  bottom: false,
+                  child: Column(
+                    children: [
+                      const SizedBox(height: 5),
+
+                      /// HEADER
+                      _buildHeader(userData),
+
+                      const SizedBox(height: 8),
+
+                      /// PROFILE
+                      _buildProfile(userData),
+
+                      const SizedBox(height: 6),
+
+                      /// STATS
+                      _buildStats(userData),
+
+                      const SizedBox(height: 6),
+
+                      /// BUTTONS
+                      _buildButtons(userData),
+
+                      const SizedBox(height: 4),
+
+                      /// BIO
+                      _buildBio(userData),
+
+                      const SizedBox(height: 6),
+                    ],
+                  ),
+                ),
               ),
-            );
+
+              /// ================= TABS =================
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _TabBarDelegate(
+                  Container(
+                    color: theme.scaffoldBackgroundColor,
+                    child: _buildTabs(userData),
+                  ),
+                ),
+              ),
+            ];
+          },
+
+          /// ================= CONTENT =================
+          body: TabBarView(
+            children: [
+              _buildPosts(),
+              _buildGrid(controller.videos),
+              const Center(child: Text('Reposts')),
+              const Center(child: Text('Saved')),
+              const Center(child: Text('Liked')),
+            ],
+          ),
+        );
+      }),
+    ),
+  );
+}
+
+Widget _buildGrid(List<Map<String, dynamic>> items) {
+  if (items.isEmpty) {
+    return const Center(child: Text("No content"));
+  }
+
+  return GridView.builder(
+    padding: const EdgeInsets.all(4),
+    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+      crossAxisCount: 3,
+      crossAxisSpacing: 4,
+      mainAxisSpacing: 4,
+    ),
+    itemCount: items.length,
+    itemBuilder: (context, index) {
+      final item = items[index];
+      final imageUrl = item['imageUrl'] ?? '';
+
+      return Container(
+        color: Colors.black12,
+        child: imageUrl.isNotEmpty
+            ? Image.network(imageUrl, fit: BoxFit.cover)
+            : const Icon(Icons.image),
+      );
+    },
+  );
+}
+
+Widget _buildPosts() {
+  return StreamBuilder<List<Map<String, dynamic>>>(
+    stream: _supabase
+        .from('posts')
+        .stream(primaryKey: ['id'])
+        .map((posts) => posts
+            .where((post) => post['profile_id'] == widget.userId)
+            .toList()),
+    builder: (context, snapshot) {
+      // Loading state
+      if (!snapshot.hasData) {
+        return const Center(child: CircularProgressIndicator());
+      }
+
+      final posts = snapshot.data!;
+
+      // Empty state
+      if (posts.isEmpty) {
+        return const Center(child: Text("No content"));
+      }
+
+      return GridView.builder(
+        padding: const EdgeInsets.all(4),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          crossAxisSpacing: 4,
+          mainAxisSpacing: 4,
+        ),
+        itemCount: posts.length,
+        itemBuilder: (context, index) {
+          final post = posts[index];
+
+          String imageUrl = '';
+          bool hasMultiple = false;
+          bool hasVideo = false;
+
+          /// ================================
+          /// 1. Handle media_urls (List)
+          /// ================================
+          final mediaList = post['media_urls'];
+
+          if (mediaList is List && mediaList.isNotEmpty) {
+            hasMultiple = mediaList.length > 1;
+
+            // Detect if any media is video
+            for (var m in mediaList) {
+              final value = m.toString().toLowerCase();
+
+              if (value.endsWith('.mp4') ||
+                  value.endsWith('.mov') ||
+                  value.endsWith('.avi')) {
+                hasVideo = true;
+              }
+            }
+
+            final first = mediaList.first.toString();
+
+            if (first.startsWith('http')) {
+              imageUrl = first;
+            } else {
+              imageUrl = _supabase.storage
+                  .from('media')
+                  .getPublicUrl(first);
+            }
           }
 
-          // ================= NO USER =================
-          final users = snapshot.data!;
-          if (users.isEmpty) {
-            return const SafeArea(
-              child: Center(
-                child: Text('User not found'),
-              ),
-            );
+          /// ================================
+          /// 2. Fallback to single media_url
+          /// ================================
+          else if (post['media_url'] != null &&
+              post['media_url'].toString().isNotEmpty) {
+            final value = post['media_url'].toString();
+
+            if (value.endsWith('.mp4') ||
+                value.endsWith('.mov') ||
+                value.endsWith('.avi')) {
+              hasVideo = true;
+            }
+
+            if (value.startsWith('http')) {
+              imageUrl = value;
+            } else {
+              imageUrl = _supabase.storage
+                  .from('media')
+                  .getPublicUrl(value);
+            }
           }
 
-          final userData = users.first;
-          UserManager.instance.setUsers([userData]);
-
-          // ================= MAIN UI =================
-          return Scaffold(
-            backgroundColor: theme.scaffoldBackgroundColor,
-            body: NestedScrollView(
-              headerSliverBuilder: (context, innerBoxIsScrolled) {
-                return [
-                  SliverToBoxAdapter(
-                    child: SafeArea(
-                      bottom: false,
-                      child: Column(
-                        children: [
-                          const SizedBox(height: 5),
-
-                          // Header
-                          _buildHeader(userData),
-
-                          const SizedBox(height: 8),
-
-                          // Profile image + name
-                          _buildProfile(userData),
-
-                          const SizedBox(height: 6),
-
-                          // Stats
-                          _buildStats(userData),
-
-                          const SizedBox(height: 6),
-
-                          // Buttons
-                          _buildButtons(userData),
-
-                          const SizedBox(height: 4),
-
-                          // Bio + link
-                          _buildBio(userData),
-
-                          const SizedBox(height: 6),
-                        ],
-                      ),
-                    ),
+          /// ================================
+          /// Open full feed screen
+          /// ================================
+          return GestureDetector(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ProfileFeedScreen(
+                    posts: posts,
+                    initialIndex: index,
+                    username: widget.username, // ✅ FIX
                   ),
+                ),
+              );
+            },
 
-                  // Sticky tabs
-                  SliverPersistentHeader(
-                    pinned: true,
-                    delegate: _TabBarDelegate(
-                      Container(
-                        color: theme.scaffoldBackgroundColor,
-                        child: _buildTabs(userData),
-                      ),
-                    ),
+            child: Stack(
+              children: [
+                /// ================= IMAGE =================
+                Container(
+                  color: Colors.black12,
+                  child: imageUrl.isNotEmpty
+                      ? Image.network(
+                          imageUrl,
+                          fit: BoxFit.cover,
+                          width: double.infinity,
+                          height: double.infinity,
+                          errorBuilder: (_, __, ___) =>
+                              const Icon(Icons.broken_image),
+                        )
+                      : const Icon(Icons.image),
+                ),
+
+                /// ================= ICONS =================
+                Positioned(
+                  top: 6,
+                  right: 6,
+                  child: Row(
+                    children: [
+                      /// Video icon
+                      if (hasVideo)
+                        Container(
+                          margin: const EdgeInsets.only(left: 4),
+                          padding: const EdgeInsets.all(3),
+                          decoration: BoxDecoration(
+                            color: Colors.black45,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Icon(
+                            Icons.play_arrow,
+                            color: Colors.white,
+                            size: 16,
+                          ),
+                        ),
+
+                      /// Multiple images icon
+                      if (hasMultiple)
+                        Container(
+                          margin: const EdgeInsets.only(left: 4),
+                          padding: const EdgeInsets.all(3),
+                          decoration: BoxDecoration(
+                            color: Colors.black45,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Icon(
+                            Icons.collections,
+                            color: Colors.white,
+                            size: 16,
+                          ),
+                        ),
+                    ],
                   ),
-                ];
-              },
-
-              // Content under tabs
-              body: _buildContent(userData),
+                ),
+              ],
             ),
           );
         },
-      ),
-    ),
+      );
+    },
   );
 }
 
@@ -854,33 +1058,35 @@ Widget build(BuildContext context) {
   }
 
   /// Build glass-styled action button
-  Widget _buildButton(String text, VoidCallback onTap) {
-    final theme = Theme.of(context);
+ Widget _buildButton(String text, VoidCallback onTap) {
+  final theme = Theme.of(context);
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius:
-            BorderRadius.circular(ProfileController.buttonRadius),
-        onTap: onTap,
-        splashColor: Colors.white24,
-        highlightColor: Colors.white10,
-        child: GlassContainer(
-          height: ProfileController.buttonHeight,
-          radius: ProfileController.buttonRadius,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 15),
-            child: Center(
-              child: Text(
-                text,
-                style: TextStyle(color: theme.textTheme.bodyLarge?.color),
+  return Material(
+    color: Colors.transparent,
+    child: InkWell(
+      borderRadius:
+          BorderRadius.circular(ProfileUI.buttonRadius),
+      onTap: onTap,
+      splashColor: Colors.white24,
+      highlightColor: Colors.white10,
+      child: GlassContainer(
+        height: ProfileUI.buttonHeight,
+        radius: ProfileUI.buttonRadius,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 15),
+          child: Center(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: theme.textTheme.bodyLarge?.color,
               ),
             ),
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   // ================================
   // UI BUILDERS - BIO & LINKS
@@ -1017,127 +1223,13 @@ Widget build(BuildContext context) {
       ),
     );
   }
-
-  // ================================
-  // UI BUILDERS - CONTENT
-  // ================================
-
-  Widget _buildContent(Map<String, dynamic> userData) {
-    final theme = Theme.of(context);
-
-    final bool isPrivate = userData['isPrivate'] ?? false;
-    final bool showLikedVideos = userData['showLikedVideos'] ?? false;
-    final bool showSavedVideos = userData['showSavedVideos'] ?? false;
-
-    final List<dynamic> followers = userData['followersList'] ?? [];
-    final bool isOwner = _currentUserId == widget.userId;
-    final bool isMutual = followers.contains(_currentUserId);
-
-    if (isPrivate && !isOwner && !isMutual) {
-      return Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.lock,
-              color: theme.iconTheme.color?.withOpacity(0.6), size: 60),
-          const SizedBox(height: 15),
-          Text(
-            'This account is private',
-            style: TextStyle(
-              color: theme.textTheme.bodyLarge?.color,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Follow to see their content',
-            style: TextStyle(
-              color: theme.textTheme.bodyMedium?.color?.withOpacity(0.6),
-              fontSize: 13,
-            ),
-          ),
-        ],
-      );
-    }
-
-    return TabBarView(
-      children: [
-        _buildPostsGrid('image'),
-        _buildPostsGrid('video'),
-        _buildPostsGrid('repost'),
-        (showSavedVideos || isOwner || isMutual)
-            ? _buildPostsGrid('saved')
-            : const Center(child: Text('Saved videos are private')),
-        (showLikedVideos || isOwner || isMutual)
-            ? _buildPostsGrid('liked')
-            : const Center(child: Text('Liked videos are private')),
-      ],
-    );
-  }
-
-  /// Build grid of posts for a specific type
-  /// 
-  /// Note: Filtering is done in Dart after fetching from Supabase.
-  /// For better performance with large datasets, consider filtering
-  /// at the database level using .eq('type', type) in the query.
-  Widget _buildPostsGrid(String type) {
-  final theme = Theme.of(context);
-
-  return StreamBuilder<List<Map<String, dynamic>>>(
-    stream: _supabase
-        .from('posts')
-        .stream(primaryKey: ['id'])
-        .eq('profile_id', widget.userId), 
-    builder: (context, snapshot) {
-      if (!snapshot.hasData) {
-        return const Center(child: CircularProgressIndicator());
-      }
-
-      final posts = snapshot.data!
-          .where((post) => post['type'] == type)
-          .toList();
-
-      if (posts.isEmpty) {
-        return const Center(child: Text('No content'));
-      }
-
-      return GridView.builder(
-        physics: const CarouselScrollPhysics(),
-        padding: const EdgeInsets.all(4),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 4,
-          mainAxisSpacing: 4,
-        ),
-        itemCount: posts.length,
-        itemBuilder: (context, index) {
-          final data = posts[index];
-          final String imageUrl = (data['imageUrl'] ?? '').toString();
-
-          return Container(
-            color: theme.brightness == Brightness.dark
-                ? Colors.white12
-                : Colors.black12,
-            child: data['type'] == 'video'
-                ? const Icon(Icons.play_arrow)
-                : imageUrl.isNotEmpty
-                    ? Image.network(imageUrl, fit: BoxFit.cover)
-                    : const Center(
-                        child: Icon(Icons.image_not_supported_outlined),
-                      ),
-          );
-        },
-      );
-    },
-  );
-}
-
+  
   /// Build glass-styled icon button
   Widget _buildIcon(IconData icon) {
     final theme = Theme.of(context);
 
     return GlassContainer(
-      height: ProfileController.headerSize,
+      height: ProfileUI.headerSize,
       radius: 20,
       child: Padding(
         padding: const EdgeInsets.all(8),

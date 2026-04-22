@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/theme/theme_controller.dart';
 import "features/auth/ui/auth_gate.dart";
 import 'package:aorandra/shared/services/user_manager.dart';
+import 'controller/like_controller.dart';
 
 // ================================
 // MAIN ENTRY POINT
@@ -37,6 +38,7 @@ Future<void> main() async {
 
   // Register ThemeController as a singleton using GetX
   Get.put(ThemeController());
+  Get.put(LikeController());
 
   // Launch the application
   runApp(const MyApp());

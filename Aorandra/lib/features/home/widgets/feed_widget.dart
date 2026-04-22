@@ -1,3 +1,4 @@
+import 'package:get/get.dart';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:aorandra/features/home/logic/home_controller.dart';
@@ -6,6 +7,7 @@ import 'package:video_player/video_player.dart';
 import 'package:aorandra/core/widgets/time_text.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../shared/widgets/glass_button.dart';
+import 'package:aorandra/controller/like_controller.dart';
 
 /// =============================================
 /// FEED WIDGET
@@ -69,6 +71,8 @@ class FeedWidget extends StatelessWidget {
 
   @override
 Widget build(BuildContext context) {
+  final likeController = Get.find<LikeController>();
+
   final theme = Theme.of(context);
 
   return Positioned.fill(
@@ -126,6 +130,18 @@ Widget build(BuildContext context) {
 
                   final currentUserId =
                       Supabase.instance.client.auth.currentUser?.id;
+
+
+                    if (currentUserId != null &&
+                        likeController.likesCount[postId] == null) {
+
+                       likeController.loadLikeState(
+                         profileId: currentUserId,
+                         postId: postId,
+                       );
+
+                       likeController.loadLikesCount(postId);
+                    }
 
                   // Skip invalid posts
                   if (userId.isEmpty || postId.isEmpty) {
@@ -296,27 +312,35 @@ Widget build(BuildContext context) {
 
                             /// LIKE
                            GestureDetector(
-                             onTap: () => onLike(post),
-                             child: Row(
+                             onTap: () {
+                               if (currentUserId == null) return;
+
+                               likeController.toggleLike(
+                                 profileId: currentUserId,
+                                 postId: postId,
+                                 ownerId: userId,
+                               );
+                             },
+                             child: Obx(() => Row(
                                children: [
                                  Icon(
-                                   likedPosts[postId] == true
+                                   likeController.likedPosts[postId] == true
                                        ? Icons.favorite
                                        : Icons.favorite_border,
-                                   color: likedPosts[postId] == true
+                                    color: likeController.likedPosts[postId] == true
                                        ? Colors.red
                                        : theme.iconTheme.color,
-                               ),
-                               const SizedBox(width: 5),
-                               Text(
-                                 '${likesCount[postId] ?? post['likes'] ?? 0}',
-                                 style: TextStyle(
-                                   color: theme.textTheme.bodyMedium?.color,
                                  ),
-                               ),
-                             ],
+                                 const SizedBox(width: 5),
+                                 Text(
+                                   '${likeController.likesCount[postId] ?? 0}',
+                                   style: TextStyle(
+                                     color: theme.textTheme.bodyMedium?.color,
+                                   ),
+                                 ),
+                               ],
+                             )),
                            ),
-                         ),
 
                             const SizedBox(width: 14),
 
@@ -380,16 +404,16 @@ Widget build(BuildContext context) {
                       const SizedBox(height: 8),
 
                       // ================= LIKES COUNT =================
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Text(
-                          '${likesCount[postId] ?? post['likes'] ?? 0} likes',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: theme.textTheme.bodyLarge?.color,
-                          ),
-                        ),
-                      ),
+                     Padding(
+                       padding: const EdgeInsets.symmetric(horizontal: 12),
+                       child: Obx(() => Text(
+                         '${likeController.likesCount[postId] ?? 0} likes',
+                         style: TextStyle(
+                           fontWeight: FontWeight.bold,
+                           color: theme.textTheme.bodyLarge?.color,
+                         ),
+                       )),
+                     ),
 
                       // ================= CAPTION =================
                       if ((post['caption'] ?? '').toString().trim().isNotEmpty)
@@ -451,6 +475,7 @@ class _FeedVideoPlayerState extends State<_FeedVideoPlayer> {
       ..initialize().then((_) {
         if (!mounted) return;
         _controller!.setLooping(true);
+        _controller!.setVolume(0);
         _controller!.play();
         setState(() {});
       });
@@ -533,7 +558,7 @@ Widget build(BuildContext context) {
               width: 36,
               height: 36,
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.25), // 👈 خفيف جداً
+                color: Colors.black.withOpacity(0.25),
                 shape: BoxShape.circle,
               ),
               child: Icon(
