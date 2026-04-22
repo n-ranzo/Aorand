@@ -3,7 +3,7 @@ import 'package:get/get.dart';
 import 'dart:math' as math;
 import 'dart:ui';
 
-import 'package:aorandra/controller/like_controller.dart';
+import 'package:aorandra/shared/controllers/like_controller.dart';
 import 'package:flutter/material.dart';
 
 import 'widgets/video_item.dart';

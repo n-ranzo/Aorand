@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'reply_item.dart';
-import '../../data/comment_service.dart';
+import '../../../../shared/services/interactions/comment_service.dart';
 
 class CommentItem extends StatefulWidget {
   final Map comment;

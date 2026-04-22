@@ -8,7 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'core/theme/theme_controller.dart';
 import "features/auth/ui/auth_gate.dart";
 import 'package:aorandra/shared/services/user_manager.dart';
-import 'controller/like_controller.dart';
+import 'shared/controllers/like_controller.dart';
 
 // ================================
 // MAIN ENTRY POINT

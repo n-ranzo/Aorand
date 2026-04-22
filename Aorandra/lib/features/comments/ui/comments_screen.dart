@@ -1,6 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
-import '../data/comment_service.dart';
+import '../../../shared/services/interactions/comment_service.dart';
 import 'package:aorandra/features/profile/ui/profile_screen.dart'; // Profile navigation
 import 'package:share_plus/share_plus.dart';
 

@@ -49,7 +49,7 @@ import 'package:aorandra/features/notifications/ui/notfications_screen.dart';
 import 'package:aorandra/features/home/widgets/feed_widget.dart';
 import 'package:aorandra/features/story/data/story_service.dart';
 import 'package:aorandra/features/share/ui/share_sheet.dart';
-import 'package:aorandra/features/share/data/share_service.dart';
+import 'package:aorandra/shared/services/interactions/share_service.dart';
 import 'package:aorandra/main/interaction_service.dart';
 // ================================
 // FEATURE WIDGETS
@@ -1142,11 +1142,6 @@ Widget buildFeed() {
     savePosts: savePosts,
     likesCount: likesCount,
     commentsCount: commentsCount,
-
-    // ================= MEDIA =================
-    pageControllers: pageControllers,
-    pageIndexes: pageIndexes,
-
     // ================= ACTIONS =================
     onRefresh: _manualRefresh,
     onLoadComments: _loadCommentsCounts,
