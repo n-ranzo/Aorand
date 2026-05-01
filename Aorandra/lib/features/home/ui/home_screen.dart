@@ -49,6 +49,7 @@ import 'package:aorandra/features/notifications/ui/notfications_screen.dart';
 import 'package:aorandra/features/home/widgets/feed_widget.dart';
 import 'package:aorandra/features/story/data/story_service.dart';
 import 'package:aorandra/features/share/ui/share_sheet.dart';
+import 'package:aorandra/shared/services/follow_service.dart';
 import 'package:aorandra/shared/services/interactions/share_service.dart';
 import 'package:aorandra/main/interaction_service.dart';
 // ================================
@@ -74,10 +75,9 @@ class _HomeScreenState extends State<HomeScreen> {
   final supabase = Supabase.instance.client;
   // ignore: unused_field
   final SearchHistoryService searchHistoryService = SearchHistoryService();
-  
 
- final GlobalKey<RefreshIndicatorState> _refreshKey =
-    GlobalKey<RefreshIndicatorState>();
+  final GlobalKey<RefreshIndicatorState> _refreshKey =
+      GlobalKey<RefreshIndicatorState>();
   // ================================
   // CONTROLLERS
   // ================================
@@ -122,12 +122,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Map<String, bool> likedPosts = {};
   Map<String, int> likesCount = {};
   Map<String, int> commentsCount = {};
-  Map<String, bool> followingUsers = {};
 
-  // PAGE CONTROLLERS 
+  // PAGE CONTROLLERS
   final Map<String, PageController> pageControllers = {};
 
-  // CURRENT PAGE 
+  // CURRENT PAGE
   final Map<String, ValueNotifier<int>> pageIndexes = {};
 
   // ================================
@@ -142,369 +141,342 @@ class _HomeScreenState extends State<HomeScreen> {
   // HELPERS
   // ================================
 
-Future<int> getSharesCount(String postId) async {
-  final data = await supabase
-      .from('messages')
-      .select('id')
-      .eq('post_id', postId);
+  Future<int> getSharesCount(String postId) async {
+    final data =
+        await supabase.from('messages').select('id').eq('post_id', postId);
 
-  return data.length;
-}
+    return data.length;
+  }
 
   bool get isNavExpanded => navDrag < -30;
 
-bool isRefreshing = false;
+  bool isRefreshing = false;
 
-Future<void> _manualRefresh() async {
-  if (isRefreshing) return;
+  Future<void> _manualRefresh() async {
+    if (isRefreshing) return;
 
-  setState(() => isRefreshing = true);
+    setState(() => isRefreshing = true);
 
-  final stopwatch = Stopwatch()..start();
+    final stopwatch = Stopwatch()..start();
 
-  try {
-    final newPosts = await _fetchPosts();
+    try {
+      final newPosts = await _fetchPosts();
 
-    await _loadLikedPosts();
+      await _loadLikedPosts();
 
-    
-    final elapsed = stopwatch.elapsedMilliseconds;
+      final elapsed = stopwatch.elapsedMilliseconds;
 
-    
-    if (elapsed < 700) {
-      await Future.delayed(Duration(milliseconds: 700 - elapsed));
-    }
+      if (elapsed < 700) {
+        await Future.delayed(Duration(milliseconds: 700 - elapsed));
+      }
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    setState(() {
-      _postsFuture = Future.value(newPosts);
-    });
-
-  } catch (e) {
-    debugPrint('Refresh failed: $e');
-  } finally {
-    if (mounted) {
-      setState(() => isRefreshing = false);
+      setState(() {
+        _postsFuture = Future.value(newPosts);
+      });
+    } catch (e) {
+      debugPrint('Refresh failed: $e');
+    } finally {
+      if (mounted) {
+        setState(() => isRefreshing = false);
+      }
     }
   }
-}
 
-Future<void> _handleSend(
-  Map post,
-  Set<String> users,
-  String message,
-) async {
-  final senderId = supabase.auth.currentUser?.id;
+  Future<void> _handleSend(
+    Map post,
+    Set<String> users,
+    String message,
+  ) async {
+    final senderId = supabase.auth.currentUser?.id;
 
-  // ================= VALIDATION =================
-  if (senderId == null) {
-    debugPrint("❌ No authenticated user");
-    return;
+    // ================= VALIDATION =================
+    if (senderId == null) {
+      debugPrint("❌ No authenticated user");
+      return;
+    }
+
+    if (post['id'] == null) {
+      debugPrint("❌ Post ID is null");
+      return;
+    }
+
+    if (users.isEmpty) {
+      debugPrint("❌ No users selected");
+      return;
+    }
+
+    try {
+      debugPrint("Sending...");
+      debugPrint("Sender: $senderId");
+      debugPrint("Post: ${post['id']}");
+      debugPrint("Users: $users");
+      debugPrint("Message: $message");
+
+      // ================= CALL SERVICE =================
+      await _shareService.sendPost(
+        senderId: senderId,
+        postId: post['id'],
+        users: users,
+        message: message,
+      );
+
+      debugPrint("Send success");
+
+      if (!mounted) return;
+
+      Navigator.pop(context);
+      _showCenterSentToast();
+
+      // Optional (you can remove later if you go realtime)
+      await _manualRefresh();
+    } catch (e) {
+      debugPrint("Send error: $e");
+    }
   }
 
-  if (post['id'] == null) {
-    debugPrint("❌ Post ID is null");
-    return;
+  Future<void> _handleLike(Map post) async {
+    final String? userId = supabase.auth.currentUser?.id;
+    final String postId = post['id'];
+    final String postOwnerId = post['profile_id'] ?? '';
+
+    // Validate current user
+    if (userId == null) return;
+
+    try {
+      // ================= OPTIMISTIC UI UPDATE =================
+      setState(() {
+        // Toggle like state
+        likedPosts[postId] = !(likedPosts[postId] ?? false);
+
+        // Update likes count
+        if (likedPosts[postId] == true) {
+          likesCount[postId] = (likesCount[postId] ?? 0) + 1;
+        } else {
+          likesCount[postId] = (likesCount[postId] ?? 1) - 1;
+        }
+      });
+
+      // ================= SYNC WITH DATABASE =================
+      await InteractionService.toggleLike(
+        userId: userId,
+        postId: postId,
+        ownerId: postOwnerId,
+      );
+    } catch (error) {
+      debugPrint("Like error: $error");
+
+      // ================= OPTIONAL: ROLLBACK UI =================
+      setState(() {
+        likedPosts[postId] = !(likedPosts[postId] ?? false);
+
+        if (likedPosts[postId] == true) {
+          likesCount[postId] = (likesCount[postId] ?? 0) + 1;
+        } else {
+          likesCount[postId] = (likesCount[postId] ?? 1) - 1;
+        }
+      });
+    }
   }
-
-  if (users.isEmpty) {
-    debugPrint("❌ No users selected");
-    return;
-  }
-
-  try {
-    debugPrint("Sending...");
-    debugPrint("Sender: $senderId");
-    debugPrint("Post: ${post['id']}");
-    debugPrint("Users: $users");
-    debugPrint("Message: $message");
-
-    // ================= CALL SERVICE =================
-    await _shareService.sendPost(
-      senderId: senderId,
-      postId: post['id'],
-      users: users,
-      message: message,
-    );
-
-    debugPrint("Send success");
-
-    if (!mounted) return;
-
-    Navigator.pop(context);
-    _showCenterSentToast();
-
-    // Optional (you can remove later if you go realtime)
-    await _manualRefresh();
-
-  } catch (e) {
-    debugPrint("Send error: $e");
-  }
-}
-
-Future<void> _handleLike(Map post) async {
-  final String? userId = supabase.auth.currentUser?.id;
-  final String postId = post['id'];
-  final String postOwnerId = post['profile_id'] ?? '';
-
-  // Validate current user
-  if (userId == null) return;
-
-  try {
-    // ================= OPTIMISTIC UI UPDATE =================
-    setState(() {
-      // Toggle like state
-      likedPosts[postId] = !(likedPosts[postId] ?? false);
-
-      // Update likes count
-      if (likedPosts[postId] == true) {
-        likesCount[postId] = (likesCount[postId] ?? 0) + 1;
-      } else {
-        likesCount[postId] = (likesCount[postId] ?? 1) - 1;
-      }
-    });
-
-    // ================= SYNC WITH DATABASE =================
-    await InteractionService.toggleLike(
-      userId: userId,
-      postId: postId,
-      ownerId: postOwnerId,
-    );
-
-  } catch (error) {
-    debugPrint("Like error: $error");
-
-    // ================= OPTIONAL: ROLLBACK UI =================
-    setState(() {
-      likedPosts[postId] = !(likedPosts[postId] ?? false);
-
-      if (likedPosts[postId] == true) {
-        likesCount[postId] = (likesCount[postId] ?? 0) + 1;
-      } else {
-        likesCount[postId] = (likesCount[postId] ?? 1) - 1;
-      }
-    });
-  }
-}
-
-Future<void> _handleFollow(String targetId) async {
-  final String? userId = supabase.auth.currentUser?.id;
-
-  // Validate current user
-  if (userId == null) return;
-
-  try {
-    // ================= OPTIMISTIC UI UPDATE =================
-    setState(() {
-      followingUsers[targetId] = !(followingUsers[targetId] ?? false);
-    });
-
-    // ================= SYNC WITH DATABASE =================
-    await InteractionService.toggleFollow(
-      userId: userId,
-      targetId: targetId,
-    );
-
-  } catch (error) {
-    debugPrint("Follow error: $error");
-  }
-}
 
   // ================================
   // LIFECYCLE
   // ================================
 
- @override
-void initState() {
-  super.initState();
+  @override
+  void initState() {
+    super.initState();
 
-  _postsFuture = _fetchPosts();
+    _postsFuture = _fetchPosts();
 
-  _loadMyAvatar();
-  _loadLikedPosts();
-  _loadCommentsCounts();
-  _loadSavedPosts();
+    _loadMyAvatar();
+    _loadLikedPosts();
+    _loadCommentsCounts();
+    _loadSavedPosts();
 
+    searchController.addListener(_onSearchChanged);
 
-  searchController.addListener(_onSearchChanged);
-
-  _scrollController.addListener(() {
-    if (!mounted) return;
-    final offset = _scrollController.offset;
-    setState(() {
-      headerOffset = (offset * 0.7).clamp(0, 80);
+    _scrollController.addListener(() {
+      if (!mounted) return;
+      final offset = _scrollController.offset;
+      setState(() {
+        headerOffset = (offset * 0.7).clamp(0, 80);
+      });
     });
-  });
-}
+  }
 
-/// Opens the share bottom sheet
-/// Displays a draggable sheet with users to share the post with
-/// Opens the share bottom sheet
-/// Displays a draggable sheet with users list and actions
-void _openShareSheet(Map post) {
-  showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.black.withOpacity(0.4),
-    builder: (_) {
-      return DraggableScrollableSheet(
-        initialChildSize: 0.55,
-        minChildSize: 0.4,
-        maxChildSize: 0.85,
-        expand: false, 
-        builder: (context, scrollController) {
-          return ShareSheet(
-            post: post,
-            scrollController: scrollController,
+  /// Opens the share bottom sheet
+  /// Displays a draggable sheet with users to share the post with
+  /// Opens the share bottom sheet
+  /// Displays a draggable sheet with users list and actions
+  void _openShareSheet(Map post) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.4),
+      builder: (_) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.55,
+          minChildSize: 0.4,
+          maxChildSize: 0.85,
+          expand: false,
+          builder: (context, scrollController) {
+            return ShareSheet(
+              post: post,
+              scrollController: scrollController,
 
-            // Clean handler call
-            onSend: _handleSend,
-          );
-        },
-      );
-    },
-  );
-}
+              // Clean handler call
+              onSend: _handleSend,
+            );
+          },
+        );
+      },
+    );
+  }
 
 // Separate function to call Supabase
-Future<List<dynamic>> _fetchPosts() async {
-  try {
-    // ============================
-    // 1. FETCH POSTS
-    // ============================
-    final posts = await supabase
-        .from('posts')
-        .select()
-        .eq('type', 'post')
-        .order('created_at', ascending: false);
+  Future<List<dynamic>> _fetchPosts() async {
+    try {
+      // ============================
+      // 1. FETCH POSTS
+      // ============================
+      final posts = await supabase
+          .from('posts')
+          .select()
+          .eq('type', 'post')
+          .order('created_at', ascending: false);
 
-    if (posts.isEmpty) return [];
+      if (posts.isEmpty) return [];
 
-    // ============================
-    // 2. EXTRACT PROFILE IDS
-    // ============================
-    final profileIds = posts
-        .map((post) => post['profile_id'])
-        .where((id) => id != null)
-        .toSet()
-        .toList();
+      // ============================
+      // 2. EXTRACT PROFILE IDS
+      // ============================
+      final profileIds = posts
+          .map((post) => post['profile_id'])
+          .where((id) => id != null)
+          .toSet()
+          .toList();
 
-    // ============================
-    // 3. FETCH USERS
-    // ============================
-    final users = await supabase
-        .from('profiles')
-        .select('id, username, avatar_url')
-        .inFilter('id', profileIds);
+      FollowService.instance.primeUsers(
+        profileIds.map((id) => id.toString()),
+      );
 
-    // ============================
-    // 4. CACHE USERS (SAFE)
-    // ============================
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      UserManager.instance.setUsers(users);
-    });
+      // ============================
+      // 3. FETCH USERS
+      // ============================
+      final users = await supabase
+          .from('profiles')
+          .select('id, username, avatar_url')
+          .inFilter('id', profileIds);
 
-    final Map<String, dynamic> usersMap = {
-      for (var user in users)
-        user['id'].toString(): {
-          'id': user['id'],
-          'username': user['username'] ?? 'User',
-          'image': user['avatar_url'] ?? '',
-        }
-    };
-
-    // ============================
-    // 5. MERGE POSTS + USERS
-    // ============================
-    final enrichedPosts = posts.map((post) {
-      final profileId = post['profile_id']?.toString();
-
-      return {
-        ...post,
-        'user': usersMap[profileId] ?? {
-          'id': profileId,
-          'username': 'User',
-          'image': '',
-        },
-      };
-    }).toList();
-
-    // ============================
-    // 6. PREPARE POST IDS
-    // ============================
-    final postIds = enrichedPosts
-        .map((p) => p['id']?.toString())
-        .where((id) => id != null)
-        .toList();
-
-    // ============================
-    // 7. LOAD LIKES COUNT
-    // ============================
-    final likesData = await supabase
-        .from('likes')
-        .select('post_id')
-        .inFilter('post_id', postIds);
-
-    final Map<String, int> tempLikes = {};
-
-    for (var like in likesData) {
-      final id = like['post_id'].toString();
-      tempLikes[id] = (tempLikes[id] ?? 0) + 1;
-    }
-
-    // ============================
-    // 8. LOAD SHARES COUNT
-    // ============================
-    final messagesData = await supabase
-        .from('messages')
-        .select('post_id')
-        .inFilter('post_id', postIds);
-
-    final Map<String, int> tempShares = {};
-
-    for (var msg in messagesData) {
-      final id = msg['post_id'].toString();
-      tempShares[id] = (tempShares[id] ?? 0) + 1;
-    }
-
-    // ============================
-    // 9. APPLY FINAL DATA
-    // ============================
-    final finalPosts = enrichedPosts.map((post) {
-      final id = post['id']?.toString();
-
-      return {
-        ...post,
-
-        // ✅ FIX: keep original likes if no data
-        'likes': tempLikes[id] ?? post['likes'] ?? 0,
-
-        // ✅ shares from messages
-        'shares': tempShares[id] ?? 0,
-      };
-    }).toList();
-
-    // ============================
-    // 10. UPDATE LOCAL STATE
-    // ============================
-    if (mounted) {
-      setState(() {
-        likesCount = tempLikes;
+      // ============================
+      // 4. CACHE USERS (SAFE)
+      // ============================
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        UserManager.instance.setUsers(users);
       });
+
+      final Map<String, dynamic> usersMap = {
+        for (var user in users)
+          user['id'].toString(): {
+            'id': user['id'],
+            'username': user['username'] ?? 'User',
+            'image': user['avatar_url'] ?? '',
+          }
+      };
+
+      // ============================
+      // 5. MERGE POSTS + USERS
+      // ============================
+      final enrichedPosts = posts.map((post) {
+        final profileId = post['profile_id']?.toString();
+
+        return {
+          ...post,
+          'user': usersMap[profileId] ??
+              {
+                'id': profileId,
+                'username': 'User',
+                'image': '',
+              },
+        };
+      }).toList();
+
+      // ============================
+      // 6. PREPARE POST IDS
+      // ============================
+      final postIds = enrichedPosts
+          .map((p) => p['id']?.toString())
+          .where((id) => id != null)
+          .toList();
+
+      // ============================
+      // 7. LOAD LIKES COUNT
+      // ============================
+      final likesData = await supabase
+          .from('likes')
+          .select('post_id')
+          .inFilter('post_id', postIds);
+
+      final Map<String, int> tempLikes = {};
+
+      for (var like in likesData) {
+        final id = like['post_id'].toString();
+        tempLikes[id] = (tempLikes[id] ?? 0) + 1;
+      }
+
+      // ============================
+      // 8. LOAD SHARES COUNT
+      // ============================
+      final messagesData = await supabase
+          .from('messages')
+          .select('post_id')
+          .inFilter('post_id', postIds);
+
+      final Map<String, int> tempShares = {};
+
+      for (var msg in messagesData) {
+        final id = msg['post_id'].toString();
+        tempShares[id] = (tempShares[id] ?? 0) + 1;
+      }
+
+      // ============================
+      // 9. APPLY FINAL DATA
+      // ============================
+      final finalPosts = enrichedPosts.map((post) {
+        final id = post['id']?.toString();
+
+        return {
+          ...post,
+
+          // ✅ FIX: keep original likes if no data
+          'likes': tempLikes[id] ?? post['likes'] ?? 0,
+
+          // ✅ shares from messages
+          'shares': tempShares[id] ?? 0,
+        };
+      }).toList();
+
+      // ============================
+      // 10. UPDATE LOCAL STATE
+      // ============================
+      if (mounted) {
+        setState(() {
+          likesCount = tempLikes;
+        });
+      }
+
+      // ============================
+      // 11. RETURN POSTS
+      // ============================
+      return finalPosts;
+    } catch (e) {
+      debugPrint("FETCH POSTS ERROR: $e");
+      return [];
     }
-
-    // ============================
-    // 11. RETURN POSTS
-    // ============================
-    return finalPosts;
-
-  } catch (e) {
-    debugPrint("FETCH POSTS ERROR: $e");
-    return [];
   }
-}
 
   @override
   void dispose() {
@@ -517,62 +489,58 @@ Future<List<dynamic>> _fetchPosts() async {
   }
 
   Future<void> _loadSavedPosts() async {
-  final userId = supabase.auth.currentUser?.id;
-  if (userId == null) return;
+    final userId = supabase.auth.currentUser?.id;
+    if (userId == null) return;
 
-  final data = await supabase
-      .from('saved_posts')
-      .select('post_id')
-      .eq('profile_id', userId);
-
-  setState(() {
-    savePosts = {
-      for (var item in data)
-        item['post_id'].toString(): true,
-    };
-  });
-}
-
-Future<void> _toggleSave(String postId) async {
-  final userId = supabase.auth.currentUser?.id;
-  if (userId == null) return;
-
-  final isSaved = savePosts[postId] ?? false;
-
-
-  setState(() {
-    savePosts[postId] = !isSaved;
-  });
-
-  try {
-    final existing = await supabase
+    final data = await supabase
         .from('saved_posts')
-        .select()
-        .eq('profile_id', userId)
-        .eq('post_id', postId)
-        .maybeSingle();
+        .select('post_id')
+        .eq('profile_id', userId);
 
-    if (existing != null) {
-      await supabase
-          .from('saved_posts')
-          .delete()
-          .eq('profile_id', userId)
-          .eq('post_id', postId);
-    } else {
-      await supabase
-          .from('saved_posts')
-          .insert({
-            'profile_id': userId,
-            'post_id': postId,
-          });
-    }
-  } catch (e) {
-    // rollback
     setState(() {
-      savePosts[postId] = isSaved;
+      savePosts = {
+        for (var item in data) item['post_id'].toString(): true,
+      };
     });
   }
-}
+
+  Future<void> _toggleSave(String postId) async {
+    final userId = supabase.auth.currentUser?.id;
+    if (userId == null) return;
+
+    final isSaved = savePosts[postId] ?? false;
+
+    setState(() {
+      savePosts[postId] = !isSaved;
+    });
+
+    try {
+      final existing = await supabase
+          .from('saved_posts')
+          .select()
+          .eq('profile_id', userId)
+          .eq('post_id', postId)
+          .maybeSingle();
+
+      if (existing != null) {
+        await supabase
+            .from('saved_posts')
+            .delete()
+            .eq('profile_id', userId)
+            .eq('post_id', postId);
+      } else {
+        await supabase.from('saved_posts').insert({
+          'profile_id': userId,
+          'post_id': postId,
+        });
+      }
+    } catch (e) {
+      // rollback
+      setState(() {
+        savePosts[postId] = isSaved;
+      });
+    }
+  }
 
   // ================================
   // SEARCH
@@ -594,252 +562,240 @@ Future<void> _toggleSave(String postId) async {
   // COMMENTS
   // ================================
   /// Open the comments bottom sheet for a given post
-Future<void> _openComments(String postId) async {
-  await showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (context) {
-      return DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.65,
-        maxChildSize: 0.95,
-        minChildSize: 0.3,
-        snap: true,
-        snapSizes: const [0.65, 0.95],
-        builder: (_, scrollController) {
-          return CommentsScreen(
-            postId: postId,
-            scrollController: scrollController,
-          );
-        },
-      );
-    },
-  );
+  Future<void> _openComments(String postId) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.65,
+          maxChildSize: 0.95,
+          minChildSize: 0.3,
+          snap: true,
+          snapSizes: const [0.65, 0.95],
+          builder: (_, scrollController) {
+            return CommentsScreen(
+              postId: postId,
+              scrollController: scrollController,
+            );
+          },
+        );
+      },
+    );
 
-  // After closing comments, refresh counts to reflect any new comments or likes
-  await _manualRefresh();
-}
-
-void _openPostMenu(
-  String postId,
-  String ownerId,
-  String caption,
-) {
-  final currentUserId = supabase.auth.currentUser?.id;
-  final bool isMe = currentUserId == ownerId;
-
-  showModalBottomSheet(
-    context: context,
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.black.withValues(alpha: 0.35),
-    builder: (context) {
-      return GlassContainer(
-        height: isMe ? 260 : 300,
-        radius: 28,
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-
-              // HANDLE
-              Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-
-              // TOP ACTION BOXES
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  if (isMe)
-                    _topAction(
-                      Icons.delete_outline,
-                      "Delete",
-                      () {
-                        Navigator.pop(context);
-                        _deletePost(postId);
-                      },
-                      isDanger: true,
-                    )
-                  else
-                    _topAction(
-                      Icons.block,
-                      "Not interested",
-                      () {
-                        Navigator.pop(context);
-                      },
-                    ),
-
-                  _topAction(
-                    isMe ? Icons.edit : Icons.flag,
-                    isMe ? "Edit" : "Report",
-                    () {
-                      Navigator.pop(context);
-
-                      if (isMe) {
-                        _editPostCaption(postId, caption);
-                      }
-                    },
-                    isDanger: !isMe,
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 20),
-
-              // COPY LINK
-              _menuItem(
-                Icons.link,
-                "Copy link",
-                () async {
-                  await Clipboard.setData(
-                    ClipboardData(text: postId),
-                  );
-
-                  Navigator.pop(context);
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text("Link copied"),
-                    ),
-                  );
-                },
-              ),
-
-              const SizedBox(height: 10),
-            ],
-          ),
-        ),
-      );
-    },
-  );
-}
-
-Future<void> _deletePost(String postId) async {
-  try {
-    await supabase
-        .from('posts')
-        .delete()
-        .eq('id', postId);
-
+    // After closing comments, refresh counts to reflect any new comments or likes
     await _manualRefresh();
-  } catch (e) {
-    debugPrint("Delete failed: $e");
   }
-}
 
-void _editPostCaption(String postId, String oldCaption) {
-  final controller =
-      TextEditingController(text: oldCaption);
+  void _openPostMenu(
+    String postId,
+    String ownerId,
+    String caption,
+  ) {
+    final currentUserId = supabase.auth.currentUser?.id;
+    final bool isMe = currentUserId == ownerId;
 
-  showDialog(
-    context: context,
-    builder: (context) {
-      return AlertDialog(
-        backgroundColor: Colors.black,
-        title: const Text(
-          "Edit caption",
-          style: TextStyle(color: Colors.white),
-        ),
-        content: TextField(
-          controller: controller,
-          style: const TextStyle(color: Colors.white),
-          maxLines: 3,
-          decoration: const InputDecoration(
-            hintText: "Write caption...",
-            hintStyle: TextStyle(color: Colors.white54),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
-          TextButton(
-            onPressed: () async {
-              await supabase
-                  .from('posts')
-                  .update({
-                    'caption': controller.text.trim(),
-                  })
-                  .eq('id', postId);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withValues(alpha: 0.35),
+      builder: (context) {
+        return GlassContainer(
+          height: isMe ? 260 : 300,
+          radius: 28,
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // HANDLE
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
 
-              Navigator.pop(context);
-              _manualRefresh();
-            },
-            child: const Text("Save"),
+                // TOP ACTION BOXES
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    if (isMe)
+                      _topAction(
+                        Icons.delete_outline,
+                        "Delete",
+                        () {
+                          Navigator.pop(context);
+                          _deletePost(postId);
+                        },
+                        isDanger: true,
+                      )
+                    else
+                      _topAction(
+                        Icons.block,
+                        "Not interested",
+                        () {
+                          Navigator.pop(context);
+                        },
+                      ),
+                    _topAction(
+                      isMe ? Icons.edit : Icons.flag,
+                      isMe ? "Edit" : "Report",
+                      () {
+                        Navigator.pop(context);
+
+                        if (isMe) {
+                          _editPostCaption(postId, caption);
+                        }
+                      },
+                      isDanger: !isMe,
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 20),
+
+                // COPY LINK
+                _menuItem(
+                  Icons.link,
+                  "Copy link",
+                  () async {
+                    await Clipboard.setData(
+                      ClipboardData(text: postId),
+                    );
+
+                    Navigator.pop(context);
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text("Link copied"),
+                      ),
+                    );
+                  },
+                ),
+
+                const SizedBox(height: 10),
+              ],
+            ),
           ),
-        ],
-      );
-    },
-  );
-}
+        );
+      },
+    );
+  }
+
+  Future<void> _deletePost(String postId) async {
+    try {
+      await supabase.from('posts').delete().eq('id', postId);
+
+      await _manualRefresh();
+    } catch (e) {
+      debugPrint("Delete failed: $e");
+    }
+  }
+
+  void _editPostCaption(String postId, String oldCaption) {
+    final controller = TextEditingController(text: oldCaption);
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Colors.black,
+          title: const Text(
+            "Edit caption",
+            style: TextStyle(color: Colors.white),
+          ),
+          content: TextField(
+            controller: controller,
+            style: const TextStyle(color: Colors.white),
+            maxLines: 3,
+            decoration: const InputDecoration(
+              hintText: "Write caption...",
+              hintStyle: TextStyle(color: Colors.white54),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Cancel"),
+            ),
+            TextButton(
+              onPressed: () async {
+                await supabase.from('posts').update({
+                  'caption': controller.text.trim(),
+                }).eq('id', postId);
+
+                Navigator.pop(context);
+                _manualRefresh();
+              },
+              child: const Text("Save"),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   Future<void> _loadLikedPosts() async {
-  final profileId = supabase.auth.currentUser?.id;
-  if (profileId == null) return;
+    final profileId = supabase.auth.currentUser?.id;
+    if (profileId == null) return;
 
-  final data = await supabase
-      .from('likes')
-      .select('post_id')
-      .eq('profile_id', profileId);
-
-  if (!mounted) return;
-
-  setState(() {
-    likedPosts = {
-      for (var item in data)
-        item['post_id'].toString(): true,
-    };
-  });
-}
-
- Future<void> _loadMyAvatar() async {
-  final userId = supabase.auth.currentUser?.id;
-  if (userId == null) return;
-
-  try {
     final data = await supabase
-        .from('profiles')
-        .select('avatar_url')
-        .eq('id', userId)
-        .single();
+        .from('likes')
+        .select('post_id')
+        .eq('profile_id', profileId);
 
-    if (mounted) {
-      setState(() {
-        myAvatar = data['avatar_url'] ?? '';
-      });
+    if (!mounted) return;
+
+    setState(() {
+      likedPosts = {
+        for (var item in data) item['post_id'].toString(): true,
+      };
+    });
+  }
+
+  Future<void> _loadMyAvatar() async {
+    final userId = supabase.auth.currentUser?.id;
+    if (userId == null) return;
+
+    try {
+      final data = await supabase
+          .from('profiles')
+          .select('avatar_url')
+          .eq('id', userId)
+          .single();
+
+      if (mounted) {
+        setState(() {
+          myAvatar = data['avatar_url'] ?? '';
+        });
+      }
+    } catch (e) {
+      debugPrint('Avatar load error: $e');
     }
-  } catch (e) {
-    debugPrint('Avatar load error: $e');
-  }
-}
-
-Future<void> _loadCommentsCounts() async {
-  final data = await supabase
-      .from('comments')
-      .select('post_id');
-
-  Map<String, int> temp = {};
-
-  for (var c in data) {
-    final id = c['post_id'].toString();
-    temp[id] = (temp[id] ?? 0) + 1;
   }
 
-  if (!mounted) return;
+  Future<void> _loadCommentsCounts() async {
+    final data = await supabase.from('comments').select('post_id');
 
-  setState(() {
-    commentsCount = temp;
-  });
-}
+    Map<String, int> temp = {};
+
+    for (var c in data) {
+      final id = c['post_id'].toString();
+      temp[id] = (temp[id] ?? 0) + 1;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      commentsCount = temp;
+    });
+  }
 
   // ================================
   // PROFILE NAVIGATION
@@ -860,303 +816,295 @@ Future<void> _loadCommentsCounts() async {
   // ================================
 
   @override
-Widget build(BuildContext context) {
-  final theme = Theme.of(context);
-  final user = supabase.auth.currentUser;
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final user = supabase.auth.currentUser;
 
-  // ================= USER LOADING STATE =================
-  if (user == null) {
-    return Center(
-      child: CircularProgressIndicator(
-        color: theme.textTheme.bodyLarge?.color,
+    // ================= USER LOADING STATE =================
+    if (user == null) {
+      return Center(
+        child: CircularProgressIndicator(
+          color: theme.textTheme.bodyLarge?.color,
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: theme.scaffoldBackgroundColor,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // =========================================================
+            // MAIN FEED (HOME TAB)
+            // =========================================================
+            if (currentTab == 0) buildFeed(), // Replaced _buildRealFeed()
+
+            // =========================================================
+            // STORY SWIPE ZONE (LEFT EDGE)
+            // Handles horizontal swipe to open stories panel
+            // =========================================================
+            Positioned(
+              left: 0,
+              width: 80,
+              top: 0,
+              bottom: 0,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragUpdate: (details) {
+                  if (details.delta.dx.abs() > details.delta.dy.abs()) {
+                    setState(() {
+                      storyProgress += details.delta.dx / 300;
+                      storyProgress = storyProgress.clamp(0.0, 1.0);
+                    });
+                  }
+                },
+                onHorizontalDragEnd: (_) {
+                  setState(() {
+                    storyProgress = storyProgress > 0.4 ? 1.0 : 0.0;
+                  });
+                },
+              ),
+            ),
+
+            // =========================================================
+            // SEARCH SWIPE ZONE (TOP EDGE)
+            // Handles vertical swipe to open search panel
+            // =========================================================
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 60,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onVerticalDragUpdate: (details) {
+                  if (details.delta.dy > 3) {
+                    setState(() {
+                      searchProgress += details.delta.dy / 420;
+                      searchProgress = searchProgress.clamp(0.0, 1.0);
+                    });
+                  }
+                },
+                onVerticalDragEnd: (_) {
+                  setState(() {
+                    searchProgress = searchProgress > 0.4 ? 1.0 : 0.0;
+                  });
+                },
+              ),
+            ),
+
+            // =========================================================
+            // HEADER (VISIBLE ONLY IN HOME TAB)
+            // =========================================================
+            if (currentTab == 0) _buildHeader(),
+
+            // =========================================================
+            // STORY PANEL (SLIDE-IN)
+            // =========================================================
+            if (currentTab == 0) _buildStoryPanel(),
+
+            // =========================================================
+            // AORIS (REELS TAB)
+            // =========================================================
+            if (currentTab == 1)
+              AorisScreen(
+                videos: const ['assets/videos/test.mp4'],
+                onShare: (video) => _openShareSheet(video),
+              ),
+
+            // =========================================================
+            // CHAT TAB
+            // =========================================================
+            if (currentTab == 2)
+              ChatListScreen(
+                currentUserId: user.id,
+              ),
+
+            // =========================================================
+            // PROFILE TAB
+            // =========================================================
+            if (currentTab == 3)
+              ProfileScreen(
+                username: user.email ?? 'User',
+                userId: user.id,
+              ),
+
+            // =========================================================
+            // SIDE PANEL (SETTINGS / MENU)
+            // =========================================================
+            _buildSidePanel(),
+
+            // =========================================================
+            // SIDE PANEL GESTURE DETECTOR
+            // =========================================================
+            _buildSideGestureDetector(),
+
+            // =========================================================
+            // SEARCH SHEET (SLIDE DOWN PANEL)
+            // =========================================================
+            _buildSearchSheet(),
+
+            // =========================================================
+            // BOTTOM NAVIGATION BAR
+            // =========================================================
+            _buildBottomBar(),
+          ],
+        ),
       ),
     );
   }
 
-  return Scaffold(
-    backgroundColor: theme.scaffoldBackgroundColor,
-
-    body: SafeArea(
-      child: Stack(
+  Widget _topAction(
+    IconData icon,
+    String label,
+    VoidCallback onTap, {
+    bool isDanger = false,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
         children: [
-
-          // =========================================================
-          // MAIN FEED (HOME TAB)
-          // =========================================================
-          if (currentTab == 0)
-            buildFeed(), // Replaced _buildRealFeed()
-
-          // =========================================================
-          // STORY SWIPE ZONE (LEFT EDGE)
-          // Handles horizontal swipe to open stories panel
-          // =========================================================
-          Positioned(
-            left: 0,
-            width: 80,
-            top: 0,
-            bottom: 0,
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onHorizontalDragUpdate: (details) {
-                if (details.delta.dx.abs() > details.delta.dy.abs()) {
-                  setState(() {
-                    storyProgress += details.delta.dx / 300;
-                    storyProgress = storyProgress.clamp(0.0, 1.0);
-                  });
-                }
-              },
-              onHorizontalDragEnd: (_) {
-                setState(() {
-                  storyProgress = storyProgress > 0.4 ? 1.0 : 0.0;
-                });
-              },
+          Container(
+            width: 70,
+            height: 70,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Icon(
+              icon,
+              color: isDanger ? Colors.red : Colors.white,
+              size: 28,
             ),
           ),
-
-          // =========================================================
-          // SEARCH SWIPE ZONE (TOP EDGE)
-          // Handles vertical swipe to open search panel
-          // =========================================================
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 60,
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onVerticalDragUpdate: (details) {
-                if (details.delta.dy > 3) {
-                  setState(() {
-                    searchProgress += details.delta.dy / 420;
-                    searchProgress = searchProgress.clamp(0.0, 1.0);
-                  });
-                }
-              },
-              onVerticalDragEnd: (_) {
-                setState(() {
-                  searchProgress = searchProgress > 0.4 ? 1.0 : 0.0;
-                });
-              },
+          const SizedBox(height: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: isDanger ? Colors.red : Colors.white,
+              fontSize: 12,
             ),
           ),
-
-          // =========================================================
-          // HEADER (VISIBLE ONLY IN HOME TAB)
-          // =========================================================
-          if (currentTab == 0) _buildHeader(),
-
-          // =========================================================
-          // STORY PANEL (SLIDE-IN)
-          // =========================================================
-          if (currentTab == 0) _buildStoryPanel(),
-
-          // =========================================================
-          // AORIS (REELS TAB)
-          // =========================================================
-          if (currentTab == 1)
-            AorisScreen(
-              videos: const ['assets/videos/test.mp4'],
-              onShare: (video) => _openShareSheet(video),
-            ),
-
-          // =========================================================
-          // CHAT TAB
-          // =========================================================
-          if (currentTab == 2)
-            ChatListScreen(
-              currentUserId: user.id,
-            ),
-
-          // =========================================================
-          // PROFILE TAB
-          // =========================================================
-          if (currentTab == 3)
-            ProfileScreen(
-              username: user.email ?? 'User',
-              userId: user.id,
-            ),
-
-          // =========================================================
-          // SIDE PANEL (SETTINGS / MENU)
-          // =========================================================
-          _buildSidePanel(),
-
-          // =========================================================
-          // SIDE PANEL GESTURE DETECTOR
-          // =========================================================
-          _buildSideGestureDetector(),
-
-          // =========================================================
-          // SEARCH SHEET (SLIDE DOWN PANEL)
-          // =========================================================
-          _buildSearchSheet(),
-
-          // =========================================================
-          // BOTTOM NAVIGATION BAR
-          // =========================================================
-          _buildBottomBar(),
         ],
       ),
-    ),
-  );
-}
+    );
+  }
 
- Widget _topAction(
-  IconData icon,
-  String label,
-  VoidCallback onTap, {
-  bool isDanger = false,
-}) {
-  return GestureDetector(
-    onTap: onTap,
-    child: Column(
-      children: [
-        Container(
-          width: 70,
-          height: 70,
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.08),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Icon(
-            icon,
-            color: isDanger ? Colors.red : Colors.white,
-            size: 28,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          label,
-          style: TextStyle(
-            color: isDanger ? Colors.red : Colors.white,
-            fontSize: 12,
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-Widget _menuItem(
-  IconData icon,
-  String title,
-  VoidCallback onTap, {
-  bool isDanger = false,
-}) {
-  return ListTile(
-    onTap: onTap,
-    leading: Icon(
-      icon,
-      color: isDanger ? Colors.red : Colors.white,
-    ),
-    title: Text(
-      title,
-      style: TextStyle(
+  Widget _menuItem(
+    IconData icon,
+    String title,
+    VoidCallback onTap, {
+    bool isDanger = false,
+  }) {
+    return ListTile(
+      onTap: onTap,
+      leading: Icon(
+        icon,
         color: isDanger ? Colors.red : Colors.white,
       ),
-    ),
-  );
-}
+      title: Text(
+        title,
+        style: TextStyle(
+          color: isDanger ? Colors.red : Colors.white,
+        ),
+      ),
+    );
+  }
 
+  void _showCenterSentToast() {
+    final overlay = Overlay.of(context);
 
-
-void _showCenterSentToast() {
-  final overlay = Overlay.of(context);
-
-  final overlayEntry = OverlayEntry(
-    builder: (context) => Center(
-      child: TweenAnimationBuilder<double>(
-        tween: Tween(begin: 0, end: 1),
-        duration: const Duration(milliseconds: 250),
-        builder: (context, value, child) {
-          return Opacity(
-            opacity: value,
-            child: Transform.scale(
-              scale: value,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: BackdropFilter(
-                  filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 24,
-                      vertical: 14,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: Colors.white.withOpacity(0.15),
+    final overlayEntry = OverlayEntry(
+      builder: (context) => Center(
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0, end: 1),
+          duration: const Duration(milliseconds: 250),
+          builder: (context, value, child) {
+            return Opacity(
+              opacity: value,
+              child: Transform.scale(
+                scale: value,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: BackdropFilter(
+                    filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 14,
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.25),
-                          blurRadius: 20,
-                          spreadRadius: 1,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: Colors.white.withOpacity(0.15),
                         ),
-                      ],
-                    ),
-                    child: const Text(
-                      "Sent",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                        decoration: TextDecoration.none,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.25),
+                            blurRadius: 20,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                      child: const Text(
+                        "Sent",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          decoration: TextDecoration.none,
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
-    ),
-  );
+    );
 
-  overlay.insert(overlayEntry);
+    overlay.insert(overlayEntry);
 
-  Future.delayed(const Duration(milliseconds: 1000), () {
-    overlayEntry.remove();
-  });
-}
+    Future.delayed(const Duration(milliseconds: 1000), () {
+      overlayEntry.remove();
+    });
+  }
 
   // ================================
   // FEED
   // ================================
 
- // ================= FEED =================
+  // ================= FEED =================
 // ================================
 // FEED BUILDER
 // Returns the main feed widget (posts list)
 // ================================
-Widget buildFeed() {
-  return FeedWidget(
-    // ================= DATA =================
-    postsFuture: _postsFuture,
-    scrollController: _scrollController,
+  Widget buildFeed() {
+    return FeedWidget(
+      // ================= DATA =================
+      postsFuture: _postsFuture,
+      scrollController: _scrollController,
 
-    // ================= STATE =================
-    likedPosts: likedPosts,
-    savePosts: savePosts,
-    likesCount: likesCount,
-    commentsCount: commentsCount,
-    // ================= ACTIONS =================
-    onRefresh: _manualRefresh,
-    onLoadComments: _loadCommentsCounts,
+      // ================= STATE =================
+      likedPosts: likedPosts,
+      savePosts: savePosts,
+      likesCount: likesCount,
+      commentsCount: commentsCount,
+      // ================= ACTIONS =================
+      onRefresh: _manualRefresh,
+      onLoadComments: _loadCommentsCounts,
 
-    onLike: (post) => _handleLike(post),
-    onSave: (post) => _toggleSave(post),
-    onOpenComments: _openComments,
-    onShare: _openShareSheet,
-    onOpenProfile: _goToProfile,
-    onOpenMenu: _openPostMenu,
-
-    onFollow: _handleFollow,
-    followingUsers: followingUsers,
-  );
-}
+      onLike: (post) => _handleLike(post),
+      onSave: (post) => _toggleSave(post),
+      onOpenComments: _openComments,
+      onShare: _openShareSheet,
+      onOpenProfile: _goToProfile,
+      onOpenMenu: _openPostMenu,
+    );
+  }
   // ================================
   // HEADER
   // ================================
@@ -1204,32 +1152,32 @@ Widget buildFeed() {
   // ================================
 
   /// Gesture detector for the swipe-in side panel
- Widget _buildSideGestureDetector() {
-  return Positioned(
-    top: 0,
-    right: 0,
-    width: 110,
-    height: 90,
-    child: GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onHorizontalDragUpdate: (details) {
-        // Ignore vertical movement
-        if (details.delta.dx.abs() < details.delta.dy.abs()) return;
+  Widget _buildSideGestureDetector() {
+    return Positioned(
+      top: 0,
+      right: 0,
+      width: 110,
+      height: 90,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragUpdate: (details) {
+          // Ignore vertical movement
+          if (details.delta.dx.abs() < details.delta.dy.abs()) return;
 
-        setState(() {
-          _sideDrag += details.delta.dx;
-          _sideDrag = _sideDrag.clamp(0.0, 120.0);
-        });
-      },
-      onHorizontalDragEnd: (_) {
-        setState(() {
-          final isOpen = _sideDrag < 60;
-          _sideDrag = isOpen ? 0 : 120;
-        });
-      },
-    ),
-  );
-}
+          setState(() {
+            _sideDrag += details.delta.dx;
+            _sideDrag = _sideDrag.clamp(0.0, 120.0);
+          });
+        },
+        onHorizontalDragEnd: (_) {
+          setState(() {
+            final isOpen = _sideDrag < 60;
+            _sideDrag = isOpen ? 0 : 120;
+          });
+        },
+      ),
+    );
+  }
 
   /// Side panel with quick-access buttons (Add Post, Notifications)
   Widget _buildSidePanel() {
@@ -1276,251 +1224,213 @@ Widget buildFeed() {
   // ================================
 
 // Swipeable story panel that slides in from the left edge when swiping right on the feed
-Widget _buildStoryPanel() {
-  const double hiddenX = -120;
-  const double shownX = 10;
+  Widget _buildStoryPanel() {
+    const double hiddenX = -120;
+    const double shownX = 10;
 
-  final double currentX =
-      hiddenX + (shownX - hiddenX) * storyProgress;
+    final double currentX = hiddenX + (shownX - hiddenX) * storyProgress;
 
-  return AnimatedPositioned(
-    duration: const Duration(milliseconds: 220),
-    curve: Curves.easeOut,
-    top: HomeController.storyPanelTop,
-    bottom: HomeController.storyPanelBottom,
-    left: currentX,
-    child: Stack(
-      children: [
-        // ============================
-        // PANEL
-        // ============================
-        GlassContainer(
-          height: double.infinity,
-          radius: HomeController.storyPanelRadius,
-          child: SizedBox(
-            width: HomeController.storyPanelWidth,
-            child: Column(
-              children: [
-                Expanded(
-                  child: FutureBuilder<List<Map<String, dynamic>>>(
-                    future: storyService.getProcessedStoriesRaw(),
-                    builder: (context, snapshot) {
-                      if (!snapshot.hasData) {
-                        return const SizedBox();
-                      }
+    return AnimatedPositioned(
+      duration: const Duration(milliseconds: 220),
+      curve: Curves.easeOut,
+      top: HomeController.storyPanelTop,
+      bottom: HomeController.storyPanelBottom,
+      left: currentX,
+      child: Stack(
+        children: [
+          // ============================
+          // PANEL
+          // ============================
+          GlassContainer(
+            height: double.infinity,
+            radius: HomeController.storyPanelRadius,
+            child: SizedBox(
+              width: HomeController.storyPanelWidth,
+              child: Column(
+                children: [
+                  Expanded(
+                    child: FutureBuilder<List<Map<String, dynamic>>>(
+                      future: storyService.getProcessedStoriesRaw(),
+                      builder: (context, snapshot) {
+                        if (!snapshot.hasData) {
+                          return const SizedBox();
+                        }
 
-                      final stories = snapshot.data!;
-                      final currentUserId =
-                          supabase.auth.currentUser?.id;
+                        final stories = snapshot.data!;
+                        final currentUserId = supabase.auth.currentUser?.id;
 
-                      // ================= FILTER 24h =================
-                      final validStories =
-                          stories.where((story) {
-                        final createdAt = DateTime.tryParse(
-                            story['created_at'] ?? '');
-                        if (createdAt == null) return false;
+                        // ================= FILTER 24h =================
+                        final validStories = stories.where((story) {
+                          final createdAt =
+                              DateTime.tryParse(story['created_at'] ?? '');
+                          if (createdAt == null) return false;
 
-                        return createdAt.isAfter(
-                          DateTime.now().subtract(
-                              const Duration(hours: 24)),
-                        );
-                      }).toList();
+                          return createdAt.isAfter(
+                            DateTime.now().subtract(const Duration(hours: 24)),
+                          );
+                        }).toList();
 
-                      // ================= GROUP =================
-                      final Map<String,
-                              List<Map<String, dynamic>>>
-                          groupedStories = {};
+                        // ================= GROUP =================
+                        final Map<String, List<Map<String, dynamic>>>
+                            groupedStories = {};
 
-                      for (var story in validStories) {
-                        final userId =
-                            story['profile_id']?.toString();
+                        for (var story in validStories) {
+                          final userId = story['profile_id']?.toString();
 
-                        if (userId == null) continue;
+                          if (userId == null) continue;
 
-                        groupedStories
-                            .putIfAbsent(userId, () => []);
-                        groupedStories[userId]!.add(story);
-                      }
+                          groupedStories.putIfAbsent(userId, () => []);
+                          groupedStories[userId]!.add(story);
+                        }
 
-                      final myStories =
-                          groupedStories[currentUserId] ?? [];
+                        final myStories = groupedStories[currentUserId] ?? [];
 
-                      groupedStories.remove(currentUserId);
+                        groupedStories.remove(currentUserId);
 
-                      final otherUsers =
-                          groupedStories.entries.toList();
+                        final otherUsers = groupedStories.entries.toList();
 
-                      return ListView.builder(
-                        padding:
-                            const EdgeInsets.symmetric(
-                                vertical: 20),
-                        itemCount:
-                            otherUsers.length + 1,
-                        itemBuilder: (_, index) {
+                        return ListView.builder(
+                          padding: const EdgeInsets.symmetric(vertical: 20),
+                          itemCount: otherUsers.length + 1,
+                          itemBuilder: (_, index) {
+                            // ================= MY STORY =================
+                            if (index == 0) {
+                              if (currentUserId == null) {
+                                return const SizedBox.shrink();
+                              }
 
-                          // ================= MY STORY =================
-                          if (index == 0) {
-                            if (currentUserId == null) {
-                              return const SizedBox.shrink();
+                              final myAvatar =
+                                  UserManager.instance.getAvatar(currentUserId);
+
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 18),
+                                child: InkWell(
+                                  onTap: () {
+                                    if (myStories.isNotEmpty) {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => StoryScreen(
+                                            stories: myStories
+                                                .map((s) =>
+                                                    s['media_url'] as String)
+                                                .toList(),
+                                            username: "My Story",
+                                            userProfileImage: myAvatar,
+                                            storyDocId: '',
+                                            isMyStory: true,
+                                            viewers: const [],
+                                          ),
+                                        ),
+                                      );
+                                    } else {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (_) => const CameraScreen(),
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  child: StoryItem(
+                                    imageUrl: myAvatar,
+                                    username: 'My Story',
+                                    isMe: true,
+                                    hasStory: myStories.isNotEmpty,
+                                  ),
+                                ),
+                              );
                             }
 
-                            final myAvatar =
-                                UserManager.instance
-                                    .getAvatar(currentUserId);
+                            // ================= OTHER USERS =================
+                            final userStories = otherUsers[index - 1].value;
+                            final firstStory = userStories.first;
+
+                            final userId = firstStory['profile_id'].toString();
+
+                            final avatar =
+                                UserManager.instance.getAvatar(userId);
+
+                            final username =
+                                UserManager.instance.getUsername(userId);
 
                             return Padding(
-                              padding:
-                                  const EdgeInsets.only(
-                                      bottom: 18),
+                              padding: const EdgeInsets.only(bottom: 18),
                               child: InkWell(
                                 onTap: () {
-                                  if (myStories.isNotEmpty) {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            StoryScreen(
-                                          stories: myStories
-                                              .map((s) =>
-                                                  s['media_url']
-                                                      as String)
-                                              .toList(),
-                                          username: "My Story",
-                                          userProfileImage:
-                                              myAvatar,
-                                          storyDocId: '',
-                                          isMyStory: true,
-                                          viewers: const [],
-                                        ),
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => StoryScreen(
+                                        stories: userStories
+                                            .map(
+                                                (s) => s['media_url'] as String)
+                                            .toList(),
+                                        username: username,
+                                        userProfileImage: avatar,
+                                        storyDocId: firstStory['id'] ?? '',
+                                        isMyStory: false,
+                                        viewers:
+                                            List<Map<String, dynamic>>.from(
+                                                firstStory['viewers'] ?? []),
                                       ),
-                                    );
-                                  } else {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            const CameraScreen(),
-                                      ),
-                                    );
-                                  }
+                                    ),
+                                  );
                                 },
                                 child: StoryItem(
-                                  imageUrl: myAvatar,
-                                  username: 'My Story',
-                                  isMe: true,
-                                  hasStory:
-                                      myStories.isNotEmpty,
+                                  imageUrl: avatar,
+                                  username: username,
+                                  isMe: false,
+                                  hasStory: true,
+                                  isViewed: false,
                                 ),
                               ),
                             );
-                          }
-
-                          // ================= OTHER USERS =================
-                          final userStories =
-                              otherUsers[index - 1].value;
-                          final firstStory =
-                              userStories.first;
-
-                          final userId =
-                              firstStory['profile_id'].toString();
-
-                          final avatar =
-                              UserManager.instance
-                                  .getAvatar(userId);
-
-                          final username =
-                              UserManager.instance
-                                  .getUsername(userId);
-
-                          return Padding(
-                            padding: const EdgeInsets.only(
-                                bottom: 18),
-                            child: InkWell(
-                              onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) =>
-                                        StoryScreen(
-                                      stories: userStories
-                                          .map((s) =>
-                                              s['media_url']
-                                                  as String)
-                                          .toList(),
-                                      username: username,
-                                      userProfileImage:
-                                          avatar,
-                                      storyDocId:
-                                          firstStory['id'] ??
-                                              '',
-                                      isMyStory: false,
-                                      viewers: List<
-                                              Map<String,
-                                                  dynamic>>.from(
-                                          firstStory[
-                                                  'viewers'] ??
-                                              []),
-                                    ),
-                                  ),
-                                );
-                              },
-                              child: StoryItem(
-                                imageUrl: avatar,
-                                username: username,
-                                isMe: false,
-                                hasStory: true,
-                                isViewed: false,
-                              ),
-                            ),
-                          );
-                        },
-                      );
-                    },
+                          },
+                        );
+                      },
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
 
-        // ============================
-        // CLOSE HANDLE
-        // ============================
-        Positioned(
-          right: 0,
-          top: 0,
-          bottom: 0,
-          width: 40,
-          child: GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            onHorizontalDragUpdate: (details) {
-              final dx = details.delta.dx;
+          // ============================
+          // CLOSE HANDLE
+          // ============================
+          Positioned(
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 40,
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragUpdate: (details) {
+                final dx = details.delta.dx;
 
-              setState(() {
-                if (dx < 0) {
-                  storyProgress += dx / 60;
-                  storyProgress =
-                      storyProgress.clamp(0.0, 1.0);
-                }
-              });
-            },
-            onHorizontalDragEnd: (_) {
-              setState(() {
-                if (storyProgress < 0.3) {
-                  storyProgress = 0.0;
-                } else {
-                  storyProgress = 1.0;
-                }
-              });
-            },
+                setState(() {
+                  if (dx < 0) {
+                    storyProgress += dx / 60;
+                    storyProgress = storyProgress.clamp(0.0, 1.0);
+                  }
+                });
+              },
+              onHorizontalDragEnd: (_) {
+                setState(() {
+                  if (storyProgress < 0.3) {
+                    storyProgress = 0.0;
+                  } else {
+                    storyProgress = 1.0;
+                  }
+                });
+              },
+            ),
           ),
-        ),
-      ],
-    ),
-  );
-}
-
-
+        ],
+      ),
+    );
+  }
 
   // ================================
   // SEARCH SHEET
@@ -1608,8 +1518,7 @@ Widget _buildStoryPanel() {
                   hintStyle:
                       TextStyle(color: theme.textTheme.bodyMedium?.color),
                   border: InputBorder.none,
-                  prefixIcon:
-                      Icon(Icons.search, color: theme.iconTheme.color),
+                  prefixIcon: Icon(Icons.search, color: theme.iconTheme.color),
                   suffixIcon: searchController.text.isNotEmpty
                       ? IconButton(
                           icon: Icon(Icons.close, color: theme.iconTheme.color),
@@ -1623,9 +1532,7 @@ Widget _buildStoryPanel() {
               ),
             ),
           ),
-
           const SizedBox(width: 8),
-
           Container(
             width: 44,
             height: 44,
@@ -1763,7 +1670,8 @@ Widget _buildStoryPanel() {
         final users = snapshot.data as List;
 
         if (users.isEmpty) {
-          return _buildSearchPlaceholder('No users found', Icons.people_outline);
+          return _buildSearchPlaceholder(
+              'No users found', Icons.people_outline);
         }
 
         return ListView.builder(
@@ -1806,90 +1714,88 @@ Widget _buildStoryPanel() {
 
   /// Explore posts grid filtered by title keyword
   Widget _buildExplorePosts() {
-  
-  final String query = searchController.text.toLowerCase();
+    final String query = searchController.text.toLowerCase();
 
-  return FutureBuilder(
-    future: supabase.from('posts').select(),
-    builder: (context, snapshot) {
-      if (!snapshot.hasData) {
-        return const Center(
-          child: CircularProgressIndicator(color: Colors.white),
-        );
-      }
-
-      final posts = snapshot.data as List;
-
-      final filteredPosts = posts.where((post) {
-        final title = (post['title'] ?? '').toString().toLowerCase();
-        return title.contains(query);
-      }).toList();
-
-      if (filteredPosts.isEmpty) {
-        return _buildSearchPlaceholder('No results found', Icons.search_off);
-      }
-
-      return GridView.builder(
-        padding: const EdgeInsets.all(6),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 3,
-          crossAxisSpacing: 4,
-          mainAxisSpacing: 4,
-        ),
-        itemCount: filteredPosts.length,
-        itemBuilder: (context, index) {
-          final postData = filteredPosts[index];
-          final String mediaUrl = postData['media_url'] ?? '';
-
-          return GestureDetector(
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => PostScreen(postData: postData),
-              ),
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Stack(
-                children: [
-
-                  // MEDIA (image or video thumbnail)
-                  Positioned.fill(
-                    child: mediaUrl.isNotEmpty
-                        ? CachedNetworkImage(
-                            imageUrl: mediaUrl,
-                            fit: BoxFit.cover,
-                            placeholder: (_, __) => Container(
-                              color: Colors.grey[900],
-                            ),
-                            errorWidget: (_, __, ___) => Container(
-                              color: Colors.grey[900],
-                              child: const Icon(Icons.broken_image,
-                                  color: Colors.white54),
-                            ),
-                          )
-                        : Container(
-                            color: Colors.grey[900],
-                          ),
-                  ),
-
-                  // VIDEO ICON OVERLAY
-                  if (mediaUrl.contains(".mp4"))
-                    const Positioned(
-                      top: 6,
-                      right: 6,
-                      child: Icon(Icons.play_arrow,
-                          color: Colors.white, size: 18),
-                    ),
-                ],
-              ),
-            ),
+    return FutureBuilder(
+      future: supabase.from('posts').select(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(
+            child: CircularProgressIndicator(color: Colors.white),
           );
-        },
-      );
-    },
-  );
-}
+        }
+
+        final posts = snapshot.data as List;
+
+        final filteredPosts = posts.where((post) {
+          final title = (post['title'] ?? '').toString().toLowerCase();
+          return title.contains(query);
+        }).toList();
+
+        if (filteredPosts.isEmpty) {
+          return _buildSearchPlaceholder('No results found', Icons.search_off);
+        }
+
+        return GridView.builder(
+          padding: const EdgeInsets.all(6),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 4,
+            mainAxisSpacing: 4,
+          ),
+          itemCount: filteredPosts.length,
+          itemBuilder: (context, index) {
+            final postData = filteredPosts[index];
+            final String mediaUrl = postData['media_url'] ?? '';
+
+            return GestureDetector(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => PostScreen(postData: postData),
+                ),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: Stack(
+                  children: [
+                    // MEDIA (image or video thumbnail)
+                    Positioned.fill(
+                      child: mediaUrl.isNotEmpty
+                          ? CachedNetworkImage(
+                              imageUrl: mediaUrl,
+                              fit: BoxFit.cover,
+                              placeholder: (_, __) => Container(
+                                color: Colors.grey[900],
+                              ),
+                              errorWidget: (_, __, ___) => Container(
+                                color: Colors.grey[900],
+                                child: const Icon(Icons.broken_image,
+                                    color: Colors.white54),
+                              ),
+                            )
+                          : Container(
+                              color: Colors.grey[900],
+                            ),
+                    ),
+
+                    // VIDEO ICON OVERLAY
+                    if (mediaUrl.contains(".mp4"))
+                      const Positioned(
+                        top: 6,
+                        right: 6,
+                        child: Icon(Icons.play_arrow,
+                            color: Colors.white, size: 18),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 
   /// Generic placeholder for empty search states
   Widget _buildSearchPlaceholder(String text, IconData icon) {
@@ -1979,212 +1885,199 @@ Widget _buildStoryPanel() {
   // BOTTOM BAR
   // ================================
 
-/// Swipe-up expandable bottom navigation bar
-Widget _buildBottomBar() {
-  final isDark = Theme.of(context).brightness == Brightness.dark;
+  /// Swipe-up expandable bottom navigation bar
+  Widget _buildBottomBar() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
-  return Align(
-    alignment: Alignment.bottomCenter,
-    child: Padding(
-      padding: EdgeInsets.only(bottom: HomeController.navBottom),
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: EdgeInsets.only(bottom: HomeController.navBottom),
 
-      // ================= DRAG TO EXPAND =================
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onVerticalDragUpdate: (details) {
-          setState(() {
-            navDrag += details.delta.dy;
-            navDrag = navDrag.clamp(-120.0, 0.0);
-          });
-        },
+        // ================= DRAG TO EXPAND =================
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onVerticalDragUpdate: (details) {
+            setState(() {
+              navDrag += details.delta.dy;
+              navDrag = navDrag.clamp(-120.0, 0.0);
+            });
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 280),
+            curve: Curves.easeOut,
+            height: isNavExpanded
+                ? HomeController.navExpandedHeight
+                : HomeController.handleHeight + 12,
+            width: isNavExpanded
+                ? HomeController.navExpandedWidth
+                : HomeController.handleWidth,
+            child: Transform.translate(
+              offset: Offset(
+                HomeController.navOffsetX,
+                HomeController.navOffsetY,
+              ),
+              child: GlassContainer(
+                height: isNavExpanded
+                    ? HomeController.navExpandedHeight
+                    : HomeController.handleHeight + 12,
+                radius: isNavExpanded
+                    ? HomeController.navRadius
+                    : HomeController.handleRadius,
+                child: isNavExpanded
 
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 280),
-          curve: Curves.easeOut,
-
-          height: isNavExpanded
-              ? HomeController.navExpandedHeight
-              : HomeController.handleHeight + 12,
-
-          width: isNavExpanded
-              ? HomeController.navExpandedWidth
-              : HomeController.handleWidth,
-
-          child: Transform.translate(
-            offset: Offset(
-              HomeController.navOffsetX,
-              HomeController.navOffsetY,
-            ),
-
-            child: GlassContainer(
-              height: isNavExpanded
-                  ? HomeController.navExpandedHeight
-                  : HomeController.handleHeight + 12,
-
-              radius: isNavExpanded
-                  ? HomeController.navRadius
-                  : HomeController.handleRadius,
-
-              child: isNavExpanded
-
-                  // ================= EXPANDED =================
-                  ? Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        _navIcon(Icons.home, 0),
-                        _navIcon(Icons.play_arrow, 1),
-
-                        GestureDetector(
-                          onTap: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const CameraScreen(),
+                    // ================= EXPANDED =================
+                    ? Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          _navIcon(Icons.home, 0),
+                          _navIcon(Icons.play_arrow, 1),
+                          GestureDetector(
+                            onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const CameraScreen(),
+                              ),
+                            ),
+                            child: Container(
+                              width: 55,
+                              height: 55,
+                              decoration: BoxDecoration(
+                                color: isDark ? Colors.white : Colors.black,
+                                borderRadius: BorderRadius.circular(18),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.3),
+                                    blurRadius: 10,
+                                  ),
+                                ],
+                              ),
+                              child: Icon(
+                                Icons.add,
+                                color: isDark ? Colors.black : Colors.white,
+                                size: 30,
+                              ),
                             ),
                           ),
-                          child: Container(
-                            width: 55,
-                            height: 55,
-                            decoration: BoxDecoration(
-                              color: isDark ? Colors.white : Colors.black,
-                              borderRadius: BorderRadius.circular(18),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.3),
-                                  blurRadius: 10,
-                                ),
-                              ],
-                            ),
-                            child: Icon(
-                              Icons.add,
-                              color: isDark ? Colors.black : Colors.white,
-                              size: 30,
-                            ),
-                          ),
-                        ),
+                          _navIcon(Icons.chat_bubble_outline, 2),
+                          _navProfileIcon(3),
+                        ],
+                      )
 
-                        _navIcon(Icons.chat_bubble_outline, 2),
-                        _navProfileIcon(3),
-                      ],
-                    )
+                    // ================= HANDLE =================
+                    : Center(
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () async {
+                            if (isHandleLoading) return;
 
-                  // ================= HANDLE =================
-                  : Center(
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
+                            setState(() => isHandleLoading = true);
 
-                        onTap: () async {
-                          if (isHandleLoading) return;
+                            // fake drag animation (smooth like pull)
+                            await _scrollController.animateTo(
+                              -80,
+                              duration: const Duration(milliseconds: 300),
+                              curve: Curves.easeOut,
+                            );
 
-                          setState(() => isHandleLoading = true);
+                            // trigger real refresh
+                            if (_refreshKey.currentState != null) {
+                              await _refreshKey.currentState!.show();
+                            }
 
-                          // fake drag animation (smooth like pull)
-                          await _scrollController.animateTo(
-                            -80,
-                            duration: const Duration(milliseconds: 300),
-                            curve: Curves.easeOut,
-                          );
+                            if (mounted) {
+                              setState(() => isHandleLoading = false);
+                            }
+                          },
+                          child: SizedBox(
+                            width: HomeController.handleWidth,
+                            height: HomeController.handleHeight + 20,
+                            child: Center(
+                              child: isHandleLoading
 
-                          // trigger real refresh
-                          if (_refreshKey.currentState != null) {
-                            await _refreshKey.currentState!.show();
-                          }
+                                  // ================= LOADING =================
+                                  ? SizedBox(
+                                      width: HomeController.handleHeight * 0.6,
+                                      height: HomeController.handleHeight * 0.6,
+                                      child: const CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
 
-                          if (mounted) {
-                            setState(() => isHandleLoading = false);
-                          }
-                        },
-
-                        child: SizedBox(
-                          width: HomeController.handleWidth,
-                          height: HomeController.handleHeight + 20,
-
-                          child: Center(
-                            child: isHandleLoading
-
-                                // ================= LOADING =================
-                                ? SizedBox(
-                                    width: HomeController.handleHeight * 0.6,
-                                    height: HomeController.handleHeight * 0.6,
-                                    child: const CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-
-                                // ================= IDLE =================
-                                : AnimatedContainer(
-                                    duration: const Duration(milliseconds: 200),
-                                    width:
-                                        HomeController.handleWidth * 0.55,
-                                    height:
-                                        HomeController.handleHeight,
-                                    decoration: BoxDecoration(
-                                      color: isDark
-                                          ? Colors.white.withValues(alpha: 0.3)
-                                          : Colors.black.withValues(alpha: 0.25),
-                                      borderRadius: BorderRadius.circular(
-                                        HomeController.handleRadius,
+                                  // ================= IDLE =================
+                                  : AnimatedContainer(
+                                      duration:
+                                          const Duration(milliseconds: 200),
+                                      width: HomeController.handleWidth * 0.55,
+                                      height: HomeController.handleHeight,
+                                      decoration: BoxDecoration(
+                                        color: isDark
+                                            ? Colors.white
+                                                .withValues(alpha: 0.3)
+                                            : Colors.black
+                                                .withValues(alpha: 0.25),
+                                        borderRadius: BorderRadius.circular(
+                                          HomeController.handleRadius,
+                                        ),
                                       ),
                                     ),
-                                  ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
-Widget _navProfileIcon(int index) {
-  final theme = Theme.of(context);
-  final userId = supabase.auth.currentUser?.id;
+  Widget _navProfileIcon(int index) {
+    final theme = Theme.of(context);
+    final userId = supabase.auth.currentUser?.id;
 
-  return AnimatedBuilder(
-    animation: UserManager.instance, // 👈 المهم
-    builder: (context, _) {
+    return AnimatedBuilder(
+      animation: UserManager.instance, // 👈 المهم
+      builder: (context, _) {
+        final avatar =
+            userId != null ? UserManager.instance.getAvatar(userId) : '';
 
-      final avatar = userId != null
-          ? UserManager.instance.getAvatar(userId)
-          : '';
-
-      return GestureDetector(
-        onTap: () => setState(() {
-          currentTab = index;
-          storyProgress = 0;
-          searchProgress = 0;
-        }),
-        child: avatar.isNotEmpty
-            ? Container(
-                padding: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: currentTab == index
-                        ? theme.iconTheme.color!
-                        : theme.iconTheme.color!.withValues(alpha: 0.5),
-                    width: 1.5,
+        return GestureDetector(
+          onTap: () => setState(() {
+            currentTab = index;
+            storyProgress = 0;
+            searchProgress = 0;
+          }),
+          child: avatar.isNotEmpty
+              ? Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: currentTab == index
+                          ? theme.iconTheme.color!
+                          : theme.iconTheme.color!.withValues(alpha: 0.5),
+                      width: 1.5,
+                    ),
                   ),
+                  child: CircleAvatar(
+                    radius: 12,
+                    backgroundImage: NetworkImage(avatar),
+                  ),
+                )
+              : Icon(
+                  Icons.person_outline,
+                  color: currentTab == index
+                      ? theme.iconTheme.color
+                      : theme.iconTheme.color?.withValues(alpha: 0.5),
+                  size: HomeController.navIconSize,
                 ),
-                child: CircleAvatar(
-                  radius: 12,
-                  backgroundImage: NetworkImage(avatar),
-                ),
-              )
-            : Icon(
-                Icons.person_outline,
-                color: currentTab == index
-                    ? theme.iconTheme.color
-                    : theme.iconTheme.color?.withValues(alpha: 0.5),
-                size: HomeController.navIconSize,
-              ),
-      );
-    },
-  );
-}
+        );
+      },
+    );
+  }
 
   /// Individual navigation icon tab button
   Widget _navIcon(IconData icon, int index) {
@@ -2297,7 +2190,8 @@ class _FeedVideoPlayerState extends State<_FeedVideoPlayer>
 
           // Play icon overlay when paused
           if (!controller.value.isPlaying)
-            const Icon(Icons.play_circle_outline, size: 70, color: Colors.white),
+            const Icon(Icons.play_circle_outline,
+                size: 70, color: Colors.white),
 
           // Mute/unmute toggle button
           Positioned(
@@ -2352,85 +2246,84 @@ class _CommentsSheetState extends State<_CommentsSheet> {
   // ================================
 // SEND COMMENT
 // ================================
-/// =============================================
-/// SEND COMMENT FUNCTION
-/// Handles:
-/// - Prevent duplicate sending
-/// - Insert comment into Supabase
-/// - Send notification to post owner
-/// - Clear input after success
-/// =============================================
-Future<void> _sendComment() async {
-  // ================= PREVENT SPAM =================
-  if (isSending) return;
+  /// =============================================
+  /// SEND COMMENT FUNCTION
+  /// Handles:
+  /// - Prevent duplicate sending
+  /// - Insert comment into Supabase
+  /// - Send notification to post owner
+  /// - Clear input after success
+  /// =============================================
+  Future<void> _sendComment() async {
+    // ================= PREVENT SPAM =================
+    if (isSending) return;
 
-  // ================= GET TEXT =================
-  final text = commentController.text.trim();
-  if (text.isEmpty) return;
+    // ================= GET TEXT =================
+    final text = commentController.text.trim();
+    if (text.isEmpty) return;
 
-  // ================= GET CURRENT USER =================
-  final user = supabase.auth.currentUser;
-  if (user == null) return;
+    // ================= GET CURRENT USER =================
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
 
-  // ================= START LOADING =================
-  setState(() => isSending = true);
+    // ================= START LOADING =================
+    setState(() => isSending = true);
 
-  try {
-    // =========================================================
-    // INSERT COMMENT INTO DATABASE
-    // Using profile_id as the single source of truth
-    // =========================================================
-    await supabase.from('comments').insert({
-      'post_id': widget.postId,
-      'profile_id': user.id,
-      'text': text,
-      'created_at': DateTime.now().toIso8601String(),
-    });
-
-    // =========================================================
-    // GET POST OWNER (for notification)
-    // FIX: use profile_id instead of profile_id
-    // =========================================================
-    final postData = await supabase
-        .from('posts')
-        .select('profile_id')
-        .eq('id', widget.postId)
-        .single();
-
-    final postOwnerId = postData['profile_id'];
-
-    // =========================================================
-    // SEND NOTIFICATION (only if not commenting on own post)
-    // =========================================================
-    if (postOwnerId != user.id) {
-      await supabase.from('notifications').insert({
-        'receiver_id': postOwnerId,
-        'sender_id': user.id,
-        'type': 'comment',
+    try {
+      // =========================================================
+      // INSERT COMMENT INTO DATABASE
+      // Using profile_id as the single source of truth
+      // =========================================================
+      await supabase.from('comments').insert({
         'post_id': widget.postId,
-        'is_read': false,
+        'profile_id': user.id,
+        'text': text,
         'created_at': DateTime.now().toIso8601String(),
       });
+
+      // =========================================================
+      // GET POST OWNER (for notification)
+      // FIX: use profile_id instead of profile_id
+      // =========================================================
+      final postData = await supabase
+          .from('posts')
+          .select('profile_id')
+          .eq('id', widget.postId)
+          .single();
+
+      final postOwnerId = postData['profile_id'];
+
+      // =========================================================
+      // SEND NOTIFICATION (only if not commenting on own post)
+      // =========================================================
+      if (postOwnerId != user.id) {
+        await supabase.from('notifications').insert({
+          'receiver_id': postOwnerId,
+          'sender_id': user.id,
+          'type': 'comment',
+          'post_id': widget.postId,
+          'is_read': false,
+          'created_at': DateTime.now().toIso8601String(),
+        });
+      }
+
+      // =========================================================
+      // CLEAR INPUT FIELD
+      // =========================================================
+      commentController.clear();
+
+      // Optional: remove keyboard
+      FocusScope.of(context).unfocus();
+    } catch (e) {
+      // =========================================================
+      // ERROR HANDLING
+      // =========================================================
+      debugPrint('Comment error: $e');
     }
 
-    // =========================================================
-    // CLEAR INPUT FIELD
-    // =========================================================
-    commentController.clear();
-
-    // Optional: remove keyboard
-    FocusScope.of(context).unfocus();
-
-  } catch (e) {
-    // =========================================================
-    // ERROR HANDLING
-    // =========================================================
-    debugPrint('Comment error: $e');
+    // ================= STOP LOADING =================
+    setState(() => isSending = false);
   }
-
-  // ================= STOP LOADING =================
-  setState(() => isSending = false);
-}
 
   @override
   void dispose() {
@@ -2513,7 +2406,6 @@ Future<void> _sendComment() async {
             children: [
               const CircleAvatar(radius: 16),
               const SizedBox(width: 10),
-
               Expanded(
                 child: TextField(
                   controller: commentController,
@@ -2525,7 +2417,6 @@ Future<void> _sendComment() async {
                   ),
                 ),
               ),
-
               isSending
                   ? const SizedBox(
                       width: 20,

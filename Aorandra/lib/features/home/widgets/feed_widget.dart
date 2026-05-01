@@ -16,13 +16,11 @@ class FeedWidget extends StatelessWidget {
   final Map<String, bool> savePosts;
   final Map<String, int> likesCount;
   final Map<String, int> commentsCount;
-  final Map<String, bool> followingUsers;
 
   // ================= ACTIONS =================
   final Future<void> Function() onRefresh;
   final VoidCallback onLoadComments;
 
-  final Future<void> Function(String userId) onFollow;
   final Future<void> Function(Map<String, dynamic> post) onLike;
   final Future<void> Function(String postId) onSave;
   final Future<void> Function(String postId) onOpenComments;
@@ -46,8 +44,6 @@ class FeedWidget extends StatelessWidget {
     required this.onShare,
     required this.onOpenProfile,
     required this.onOpenMenu,
-    required this.onFollow,
-    required this.followingUsers,
   });
 
   @override
@@ -58,7 +54,6 @@ class FeedWidget extends StatelessWidget {
       child: FutureBuilder<List<dynamic>>(
         future: postsFuture,
         builder: (context, snapshot) {
-
           /// ================= LOADING =================
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
@@ -79,7 +74,6 @@ class FeedWidget extends StatelessWidget {
           return AnimatedBuilder(
             animation: UserManager.instance,
             builder: (context, _) {
-
               return RefreshIndicator(
                 onRefresh: onRefresh,
                 color: Colors.white,
@@ -92,7 +86,6 @@ class FeedWidget extends StatelessWidget {
                   ),
                   itemCount: posts.length,
                   itemBuilder: (context, index) {
-
                     final post = Map<String, dynamic>.from(posts[index]);
 
                     final userId = post['profile_id']?.toString() ?? '';
@@ -109,7 +102,6 @@ class FeedWidget extends StatelessWidget {
                     /// Load like state once
                     if (currentUserId != null &&
                         likeController.likesCount[postId] == null) {
-
                       likeController.loadLikeState(
                         profileId: currentUserId,
                         postId: postId,
@@ -123,7 +115,6 @@ class FeedWidget extends StatelessWidget {
                       post: post,
 
                       onOpenMenu: onOpenMenu,
-                      onFollow: onFollow,
                       onOpenProfile: onOpenProfile,
 
                       onOpenComments: (postId) async {
@@ -136,8 +127,6 @@ class FeedWidget extends StatelessWidget {
                       /// 🔥 SAVE
                       onSave: onSave,
                       savedPosts: savePosts,
-
-                      followingUsers: followingUsers,
                     );
                   },
                 ),

@@ -167,9 +167,10 @@ Future<void> _uploadFinalPost() async {
     // ============================
     else if (isAorisMode) {
       for (final url in uploadedUrls) {
-        await supabase.from("aoris").insert({
+        await supabase.from("posts").insert({
           "profile_id": userId,
           "media_url": url,
+          "type": "aoris",
           "created_at": DateTime.now().toUtc().toIso8601String(),
         });
       }

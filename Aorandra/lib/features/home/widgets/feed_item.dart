@@ -9,7 +9,6 @@ class FeedItem extends StatelessWidget {
 
   /// HEADER callbacks
   final void Function(String postId, String userId, String caption) onOpenMenu;
-  final void Function(String userId) onFollow;
   final void Function(String username, String userId) onOpenProfile;
 
   /// ACTIONS callbacks
@@ -20,19 +19,15 @@ class FeedItem extends StatelessWidget {
   final void Function(String postId) onSave;
   final Map<String, bool> savedPosts;
 
-  final Map<String, bool> followingUsers;
-
   const FeedItem({
     super.key,
     required this.post,
     required this.onOpenMenu,
-    required this.onFollow,
     required this.onOpenProfile,
     required this.onOpenComments,
     required this.onShare,
     required this.onSave,
     required this.savedPosts,
-    required this.followingUsers,
   });
 
   @override
@@ -47,15 +42,11 @@ class FeedItem extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-
         /// ================= HEADER =================
         FeedHeader(
           post: post,
           onMenu: () => onOpenMenu(postId, userId, caption),
-          onFollow: () => onFollow(userId),
-          onOpenProfile: () =>
-              onOpenProfile(post['username'] ?? '', userId),
-          isFollowing: followingUsers[userId] == true,
+          onOpenProfile: () => onOpenProfile(post['username'] ?? '', userId),
         ),
 
         /// ================= MEDIA =================

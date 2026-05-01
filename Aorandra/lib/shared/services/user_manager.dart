@@ -32,6 +32,9 @@ class UserManager extends ChangeNotifier {
   /// Value: user object (Map)
   final Map<String, Map<String, dynamic>> _users = {};
 
+  /// Tracks in-flight fetch requests to avoid duplicate DB calls
+  final Map<String, Future<void>> _fetchRequests = {};
+
   // ============================================================
   // SAFE NOTIFY (avoids setState during build issues)
   // ============================================================
@@ -50,6 +53,39 @@ class UserManager extends ChangeNotifier {
   void setUser(String userId, Map<String, dynamic> data) {
     _users[userId] = data;
     _safeNotify();
+  }
+
+  // ============================================================
+  // FETCH AND CACHE
+  // ============================================================
+
+  /// Fetches a user from Supabase and caches them.
+  /// Skips if already cached. Deduplicates concurrent calls for the same user.
+  Future<void> fetchAndCache(String userId) async {
+    if (userId.isEmpty) return;
+    if (_users.containsKey(userId)) return;
+    if (_fetchRequests.containsKey(userId)) {
+      return _fetchRequests[userId];
+    }
+
+    final request = _doFetch(userId);
+    _fetchRequests[userId] = request;
+    try {
+      await request;
+    } finally {
+      _fetchRequests.remove(userId);
+    }
+  }
+
+  Future<void> _doFetch(String userId) async {
+    try {
+      final data = await supabase
+          .from('profiles')
+          .select('id, username, avatar_url, name')
+          .eq('id', userId)
+          .maybeSingle();
+      if (data != null) setUser(userId, Map<String, dynamic>.from(data));
+    } catch (_) {}
   }
 
   // ============================================================

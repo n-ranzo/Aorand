@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:aorandra/shared/services/follow_service.dart';
 
 class InteractionService {
   static final supabase = Supabase.instance.client;
@@ -45,7 +46,6 @@ class InteractionService {
       }
 
       return true;
-
     } catch (e) {
       print("Like error: $e");
       return false;
@@ -81,7 +81,6 @@ class InteractionService {
       });
 
       return true;
-
     } catch (e) {
       print("Save error: $e");
       return false;
@@ -146,7 +145,6 @@ class InteractionService {
       }
 
       return true;
-
     } catch (e) {
       print("Repost error: $e");
       return false;
@@ -158,79 +156,30 @@ class InteractionService {
     required String userId,
     required String targetId,
   }) async {
-    try {
-      final existing = await supabase
-          .from('follows')
-          .select('id')
-          .eq('follower_id', userId)
-          .eq('following_id', targetId)
-          .maybeSingle();
-
-      if (existing != null) {
-        await supabase
-            .from('follows')
-            .delete()
-            .eq('follower_id', userId)
-            .eq('following_id', targetId);
-
-        return false;
-      }
-
-      await supabase.from('follows').insert({
-        'follower_id': userId,
-        'following_id': targetId,
-        'created_at': DateTime.now().toIso8601String(),
-      });
-
-      await supabase.from('notifications').insert({
-        'receiver_id': targetId,
-        'sender_id': userId,
-        'type': 'follow',
-        'is_read': false,
-        'created_at': DateTime.now().toIso8601String(),
-      });
-
-      return true;
-
-    } catch (e) {
-      print("Follow error: $e");
-      return false;
-    }
+    return FollowService.instance.toggleFollow(targetId);
   }
 
   // ================= COUNTS (FIXED) =================
   static Future<int> getLikesCount(String postId) async {
-    final data = await supabase
-        .from('likes')
-        .select()
-        .eq('post_id', postId);
+    final data = await supabase.from('likes').select().eq('post_id', postId);
 
     return data.length;
   }
 
   static Future<int> getCommentsCount(String postId) async {
-    final data = await supabase
-        .from('comments')
-        .select()
-        .eq('post_id', postId);
+    final data = await supabase.from('comments').select().eq('post_id', postId);
 
     return data.length;
   }
 
   static Future<int> getSharesCount(String postId) async {
-    final data = await supabase
-        .from('messages')
-        .select()
-        .eq('post_id', postId);
+    final data = await supabase.from('messages').select().eq('post_id', postId);
 
     return data.length;
   }
 
   static Future<int> getRepostsCount(String postId) async {
-    final data = await supabase
-        .from('reposts')
-        .select()
-        .eq('post_id', postId);
+    final data = await supabase.from('reposts').select().eq('post_id', postId);
 
     return data.length;
   }
@@ -240,13 +189,6 @@ class InteractionService {
     required String userId,
     required String targetId,
   }) async {
-    final existing = await supabase
-        .from('follows')
-        .select('id')
-        .eq('follower_id', userId)
-        .eq('following_id', targetId)
-        .maybeSingle();
-
-    return existing != null;
+    return FollowService.instance.isFollowing(targetId);
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:aorandra/shared/services/follow_service.dart';
 import 'package:aorandra/shared/services/user_manager.dart';
 import 'package:aorandra/shared/widgets/glass_button.dart';
 import 'package:aorandra/core/widgets/time_text.dart';
@@ -11,18 +12,13 @@ class FeedHeader extends StatelessWidget {
   final Map<String, dynamic> post;
 
   final VoidCallback? onMenu;
-  final VoidCallback? onFollow;
   final VoidCallback? onOpenProfile;
-
-  final bool isFollowing;
 
   const FeedHeader({
     super.key,
     required this.post,
     this.onMenu,
-    this.onFollow,
     this.onOpenProfile,
-    this.isFollowing = false,
   });
 
   @override
@@ -33,22 +29,24 @@ class FeedHeader extends StatelessWidget {
     final username = UserManager.instance.getUsername(userId);
     final avatar = UserManager.instance.getAvatar(userId);
 
-    final currentUserId =
-        Supabase.instance.client.auth.currentUser?.id;
+    final currentUserId = Supabase.instance.client.auth.currentUser?.id;
+    final followService = FollowService.instance;
+
+    if (currentUserId != null && currentUserId != userId && userId.isNotEmpty) {
+      followService.primeUser(userId);
+    }
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       child: Row(
         children: [
-
           /// 👤 AVATAR
           GestureDetector(
             onTap: onOpenProfile,
             child: CircleAvatar(
               radius: 20,
               backgroundColor: theme.dividerColor.withOpacity(0.2),
-              backgroundImage:
-                  avatar.isNotEmpty ? NetworkImage(avatar) : null,
+              backgroundImage: avatar.isNotEmpty ? NetworkImage(avatar) : null,
             ),
           ),
 
@@ -59,7 +57,6 @@ class FeedHeader extends StatelessWidget {
             onTap: onOpenProfile,
             child: Row(
               children: [
-
                 /// Username
                 Text(
                   username,
@@ -81,8 +78,7 @@ class FeedHeader extends StatelessWidget {
                   date: post['created_at'],
                   style: TextStyle(
                     fontSize: 12,
-                    color: theme.textTheme.bodySmall?.color
-                        ?.withOpacity(0.7),
+                    color: theme.textTheme.bodySmall?.color?.withOpacity(0.7),
                   ),
                 ),
               ],
@@ -92,14 +88,38 @@ class FeedHeader extends StatelessWidget {
           const Spacer(),
 
           /// ➕ FOLLOW
-          if (currentUserId != userId)
-            GlassButton(
-              text: isFollowing ? "Following" : "Follow",
-              isActive: isFollowing,
-              width: 70,
-              height: 24,
-              fontSize: 10,
-              onPressed: onFollow,
+          if (currentUserId != null && currentUserId != userId)
+            AnimatedBuilder(
+              animation: followService,
+              builder: (context, _) {
+                final isFollowing = followService.followStateOf(userId);
+
+                return GlassButton(
+                  text: isFollowing ? "Following" : "Follow",
+                  isActive: isFollowing,
+                  isLoading: followService.isToggling(userId),
+                  width: 70,
+                  height: 24,
+                  fontSize: 10,
+                  onPressed: followService.isToggling(userId)
+                      ? null
+                      : () async {
+                          try {
+                            await followService.toggleFollow(userId);
+                          } catch (e) {
+                            debugPrint('Follow error: $e');
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Failed to follow. Please try again.'),
+                                  duration: Duration(seconds: 2),
+                                ),
+                              );
+                            }
+                          }
+                        },
+                );
+              },
             ),
 
           const SizedBox(width: 8),

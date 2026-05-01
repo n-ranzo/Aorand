@@ -15,11 +15,13 @@ import 'package:video_player/video_player.dart';
 class VideoItem extends StatefulWidget {
   final String file;
   final bool isActive;
+  final VoidCallback? onDoubleTap;
 
   const VideoItem({
     super.key,
     required this.file,
     required this.isActive,
+    this.onDoubleTap,
   });
 
   @override
@@ -110,6 +112,7 @@ class _VideoItemState extends State<VideoItem> {
 
     return GestureDetector(
       onTap: togglePause,
+      onDoubleTap: widget.onDoubleTap,
       child: Stack(
         alignment: Alignment.center,
         children: [

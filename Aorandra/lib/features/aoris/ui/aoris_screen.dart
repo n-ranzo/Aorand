@@ -1,39 +1,19 @@
-// lib/screens/aoris/aoris_screen.dart
 import 'package:get/get.dart';
-import 'dart:math' as math;
-import 'dart:ui';
 
 import 'package:aorandra/shared/controllers/like_controller.dart';
 import 'package:flutter/material.dart';
 
 import 'widgets/video_item.dart';
+import 'widgets/aoris_overlay_widgets.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:aorandra/features/comments/ui/comments_screen.dart';
-import 'package:aorandra/shared/widgets/glass_button.dart';
+import 'package:aorandra/shared/services/follow_service.dart';
+import 'package:aorandra/shared/services/user_manager.dart';
 
-
-
-// ================================
-// AORIS SCREEN
-// ================================
-
-/// AorisScreen - Vertical video feed interface (TikTok/Reels style)
-/// 
-/// Features:
-/// - Vertical PageView for video swiping
-/// - Floating action buttons with animation
-/// - Rotating music vinyl indicator
-/// - Glassmorphism UI elements
-/// - Gradient overlays for text readability
 class AorisScreen extends StatefulWidget {
   final List<String> videos;
-
   final Function(Map videos) onShare;
 
   const AorisScreen({
-
-
-
     super.key,
     required this.videos,
     required this.onShare,
@@ -44,743 +24,257 @@ class AorisScreen extends StatefulWidget {
 }
 
 class _AorisScreenState extends State<AorisScreen>
-    with TickerProviderStateMixin {
-  // ================================
-  // CONTROLLERS & STATE
-  // ================================
-
+    with SingleTickerProviderStateMixin {
+  // ── Controllers ─────────────────────────────────
   final PageController _pageController = PageController();
   int _currentIndex = 0;
 
   late final AnimationController _floatingController;
-  late final AnimationController _vinylController;
+  late final HeartColorController _heartColorCtrl;
 
-   Set<String> saveedVideo = {};
-    Set<String> followingUsers = {};
+  // ── State ────────────────────────────────────────
+  Set<String> savedVideo = {};
+  List<Map<String, dynamic>> videos = [];
+  bool isLoading = true;
+  bool _showLikeAnim = false;
 
-    List<Map<String, dynamic>> videos = [];
-    bool isLoading = true;
-
-    
-
-// ================================
-  // LIFECYCLE METHODS
-  // ================================
-
-    Future<void> refreshFeed() async {
-  setState(() {
-    isLoading = true;
-  });
-
-  await loadVideos();
-}
-
-Future<void> _openComments(Map video) async {
-  await showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (context) {
-      return DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.65, 
-        maxChildSize: 0.95,
-        minChildSize: 0.3,
-        snap: true,
-        snapSizes: const [0.65, 0.95], 
-        builder: (_, scrollController) {
-          return CommentsScreen(
-            postId: video['id'],
-            scrollController: scrollController,
-          );
-        },
-      );
-    },
-  );
-}
-
-Future<void> loadVideos() async {
-  final supabase = Supabase.instance.client;
-  final userId = supabase.auth.currentUser!.id;
-
-  final videoData = await supabase
-      .from('aoris')
-      .select()
-      .order('created_at', ascending: false);
-
-  setState(() {
-    videos = List<Map<String, dynamic>>.from(videoData);
-    isLoading = false;
-  });
-
-  /// Load like state and counts using LikeController (single source of truth)
-  final likeController = Get.find<LikeController>();
-
-  for (var video in videos) {
-    final postId = video['id'].toString();
-
-    // Avoid reloading if already موجود
-    if (likeController.likesCount[postId] == null) {
-      likeController.loadLikeState(
-        profileId: userId,
-        postId: postId,
-      );
-
-      likeController.loadLikesCount(postId);
-    }
-  }
-}
-
-Future<int> getSharesCount(String videoId) async {
-  final supabase = Supabase.instance.client;
-
-  final data = await supabase
-      .from('messages')
-      .select('id')
-      .eq('post_id', videoId);
-
-  return data.length;
-}
-
-
-  // ================================
-  // LIFECYCLE METHODS
-  // ================================
-
-
+  // ── Lifecycle ────────────────────────────────────
 
   @override
-void initState() {
-  super.initState();
+  void initState() {
+    super.initState();
+    _floatingController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
+    )..repeat(reverse: true);
 
-  _floatingController = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 2200),
-  )..repeat(reverse: true);
+    if (!Get.isRegistered<HeartColorController>()) {
+      Get.put(HeartColorController());
+    }
+    _heartColorCtrl = Get.find<HeartColorController>();
 
-  _vinylController = AnimationController(
-    vsync: this,
-    duration: const Duration(seconds: 6),
-  )..repeat();
-
-  loadVideos(); 
-}
-
-
+    loadVideos();
+  }
 
   @override
   void dispose() {
     _pageController.dispose();
     _floatingController.dispose();
-    _vinylController.dispose();
     super.dispose();
   }
 
-void _toggleSave(String videoId) {
-  setState(() {
-    if (saveedVideo.contains(videoId)) {
-      saveedVideo.remove(videoId);
-    } else {
-      saveedVideo.add(videoId);
+  // ── Data ─────────────────────────────────────────
+
+  Future<void> loadVideos() async {
+    final supabase = Supabase.instance.client;
+    final userId = supabase.auth.currentUser!.id;
+
+    final videoData = await supabase
+        .from('posts')
+        .select()
+        .eq('type', 'aoris')
+        .order('created_at', ascending: false);
+
+    setState(() {
+      videos = List<Map<String, dynamic>>.from(videoData);
+      isLoading = false;
+    });
+
+    final likeController = Get.find<LikeController>();
+    for (var video in videos) {
+      final postId = video['id'].toString();
+      if (likeController.likesCount[postId] == null) {
+        likeController.loadLikeState(profileId: userId, postId: postId);
+        likeController.loadLikesCount(postId);
+      }
     }
-  });
-}
 
-void _repost(Map video) {
-  print("Repost ${video['id']}");
-}
-  
-
-
-  // ================================
-  // MAIN BUILD METHOD
-  // ================================
-
-  @override
-Widget build(BuildContext context) {
-   final likeController = Get.find<LikeController>();
-
-  return Scaffold(
-    backgroundColor: Colors.black,
-    body: Stack(
-      children: [
-
-        // ================= DATA =================
-        if (isLoading)
-          const Center(
-            child: CircularProgressIndicator(),
-          )
-        else if (videos.isEmpty)
-          const Center(
-            child: Text(
-              "No videos yet",
-              style: TextStyle(color: Colors.white),
-            ),
-          )
-        else
-          PageView.builder(
-            controller: _pageController,
-            scrollDirection: Axis.vertical,
-            itemCount: videos.length,
-            onPageChanged: (index) {
-              setState(() {
-                _currentIndex = index;
-              });
-            },
-            itemBuilder: (context, index) {
-              final video = videos[index];
-
-              return Stack(
-                children: [
-                  VideoItem(
-                    file: video['media_url'],
-                    isActive: index == _currentIndex,
-                  ),
-
-                  const _TopGradientOverlay(),
-                  const _BottomGradientOverlay(),
-
-                  _buildRightActions(video, likeController),
-                  _buildBottomInfo(video),
-                  _buildMusicVinyl(video),
-                ],
-              );
-            },
-          ),
-
-        // ================= TOP BAR =================
-        _buildTopBar(),
-      ],
-    ),
-  );
-}
-
-  // ================================
-  // UI BUILDERS - TOP BAR
-  // ================================
-
- Widget _buildTopBar() {
-  return Positioned(
-    top: MediaQuery.of(context).padding.top + 8,
-    left: 16,
-    right: 16,
-    child: Row(
-      children: [
-
-        // REFRESH BUTTON (LEFT)
-        GestureDetector(
-          onTap: refreshFeed,
-          child: const Icon(
-            Icons.refresh,
-            color: Colors.white,
-            size: 26,
-          ),
-        ),
-
-        const Spacer(),
-
-        // Title
-        const Text(
-          "Aoris",
-          style: TextStyle(
-            fontFamily: "PacificoFont",
-            color: Colors.white,
-            fontSize: 20,
-          ),
-        ),
-
-        const Spacer(),
-
-        // ⚙️ SETTINGS
-        GestureDetector(
-          onTap: () {},
-          child: const Icon(
-            Icons.tune_rounded,
-            color: Colors.white,
-            size: 26,
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
-  // ================================
-  // UI BUILDERS - RIGHT ACTIONS
-  // ================================
-
-Widget _buildRightActions(Map video, LikeController likeController) {
-  final String videoId = video['id'];
-
-  final supabase = Supabase.instance.client;
-  final currentUserId = supabase.auth.currentUser!.id;
-
-  final isMe = video['profile_id'] == currentUserId;
-
-  return Positioned(
-    right: 10,
-    bottom: 120,
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-
-        // ================= ❤️ LIKE =================
-       GestureDetector(
-  onTap: () {
-    final postId = video['id'].toString();
-
-    if (likeController.loadingLikes.contains(postId)) return;
-
-    likeController.toggleLike(
-      profileId: Supabase.instance.client.auth.currentUser!.id,
-      postId: postId,
-      ownerId: video['profile_id'],
+    FollowService.instance.primeUsers(
+      videos
+          .map((video) => video['profile_id']?.toString() ?? '')
+          .where((id) => id.isNotEmpty),
     );
-  },
+  }
 
-  child: Obx(() {
+  Future<void> refreshFeed() async {
+    setState(() => isLoading = true);
+    await loadVideos();
+  }
+
+  Future<int> _getSharesCount(String videoId) async {
+    final data = await Supabase.instance.client
+        .from('messages')
+        .select('id')
+        .eq('post_id', videoId);
+    return data.length;
+  }
+
+  void _handleDoubleTap(Map<String, dynamic> video) {
     final postId = video['id'].toString();
+    final likeCtrl = Get.find<LikeController>();
+    if (likeCtrl.likedPosts[postId] != true) {
+      likeCtrl.toggleLike(
+        profileId: Supabase.instance.client.auth.currentUser!.id,
+        postId: postId,
+        ownerId: video['profile_id'].toString(),
+      );
+    }
+    setState(() => _showLikeAnim = true);
+  }
 
-    final isLiked =
-        likeController.likedPosts[postId] == true;
+  Future<void> _deletePost(Map<String, dynamic> video) async {
+    Navigator.pop(context);
+    final postId = video['id']?.toString() ?? '';
+    if (postId.isEmpty) return;
 
-    final likesCount =
-        likeController.likesCount[postId] ?? 0;
-
-    return Column(
-      children: [
-        Icon(
-          isLiked ? Icons.favorite : Icons.favorite_border,
-          color: isLiked ? Colors.red : Colors.white,
-          size: 26,
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1C1E),
+        title: const Text('Delete', style: TextStyle(color: Colors.white)),
+        content: const Text(
+          'Are you sure you want to delete this video?',
+          style: TextStyle(color: Colors.white70),
         ),
-        const SizedBox(height: 4),
-        Text(
-          "$likesCount",
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 11,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child:
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
           ),
-        ),
-      ],
-    );
-  }),
-),
-
-        const SizedBox(height: 14),
-
-        // ================= 💬 COMMENTS =================
-        GestureDetector(
-          onTap: () => _openComments(video),
-          child: Column(
-            children: [
-              const Icon(
-                Icons.mode_comment_outlined,
-                color: Colors.white,
-                size: 26,
-              ),
-              const SizedBox(height: 4),
-
-              FutureBuilder(
-                future: supabase
-                    .from("comments")
-                    .select()
-                    .eq("post_id", videoId),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData) {
-                    return const Text(
-                      "0",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                      ),
-                    );
-                  }
-
-                  final count = (snapshot.data as List).length;
-
-                  return Text(
-                    "$count",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                    ),
-                  );
-                },
-              ),
-            ],
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child:
+                const Text('Delete', style: TextStyle(color: Colors.redAccent)),
           ),
-        ),
-
-        const SizedBox(height: 14),
-
-        // ================= 🔁 REPOST =================
-        if (!isMe) ...[
-          GestureDetector(
-            onTap: () => _repost(video),
-            child: Column(
-              children: [
-                const Icon(
-                  Icons.repeat,
-                  color: Colors.white,
-                  size: 26,
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  "${video['reposts_count'] ?? 0}",
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
         ],
-
-        // ================= 📤 SHARE =================
-        GestureDetector(
-          onTap: () => widget.onShare(video),
-          child: Column(
-            children: [
-              const Icon(
-                Icons.send_rounded,
-                color: Colors.white,
-                size: 26,
-             ),
-
-             const SizedBox(height: 4),
-
-             FutureBuilder<int>(
-               future: getSharesCount(video['id']),
-               builder: (context, snapshot) {
-                 final shares = snapshot.data ?? 0;
-
-                 return Text(
-                   "$shares",
-                   style: const TextStyle(
-                     color: Colors.white,
-                     fontSize: 11,
-                   ),
-                 );
-               },
-             ),
-          ],
-        ),
-       ),
-
-        const SizedBox(height: 14),
-
-        // ================= SAVE =================
-        GestureDetector(
-          onTap: () => _toggleSave(videoId),
-          child: Column(
-            children: [
-              Icon(
-                saveedVideo.contains(videoId)
-                    ? Icons.bookmark
-                    : Icons.bookmark_border,
-                color: saveedVideo.contains(videoId)
-                    ? const Color.fromARGB(255, 155, 7, 39) 
-                   : Colors.white,
-                size: 26,
-              ),
-           ],
-         ),
-       ),
-      ],
-    ),
-  );
-}
-
-
-
-  // ================================
-  // UI BUILDERS - BOTTOM INFO
-  // ================================
-
- Widget _buildBottomInfo(Map video) {
-  final supabase = Supabase.instance.client;
-
-  // CURRENT USER
-  final currentUserId = supabase.auth.currentUser!.id;
-  final isMe = video['profile_id'] == currentUserId;
-
-  return Positioned(
-    left: 16,
-    right: 88,
-    bottom: 56,
-    child: FutureBuilder(
-      future: supabase
-          .from('profiles')
-          .select('username, avatar_url')
-          .eq('id', video['profile_id'])
-          .single(),
-      builder: (context, snapshot) {
-        String username = "User";
-        String? avatar;
-
-        if (snapshot.hasData) {
-          final data = snapshot.data as Map;
-          username = data['username'] ?? "User";
-          avatar = data['avatar_url'];
-        }
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ================= USER =================
-            Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.8),
-                      width: 1.2,
-                    ),
-                    image: avatar != null && avatar.isNotEmpty
-                        ? DecorationImage(
-                            image: NetworkImage(avatar),
-                            fit: BoxFit.cover,
-                          )
-                        : null,
-                  ),
-                  child: avatar == null || avatar.isEmpty
-                      ? const Icon(Icons.person, color: Colors.white)
-                      : null,
-                ),
-
-                const SizedBox(width: 10),
-
-                Expanded(
-                  child: Text(
-                    username,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-
-                const SizedBox(width: 10),
-
-                // ================= FOLLOW BUTTON =================
-                isMe
-                    ? const SizedBox(width: 70)
-                    : GlassButton(
-                        text: followingUsers.contains(video['profile_id'])
-                            ? "Following"
-                            : "Follow",
-
-                        isActive:
-                            followingUsers.contains(video['profile_id']),
-
-                        width: 70,
-                        height: 24,
-                        fontSize: 10,
-
-                        onPressed: () {
-                          setState(() {
-                            if (followingUsers
-                                .contains(video['profile_id'])) {
-                              followingUsers
-                                  .remove(video['profile_id']);
-                            } else {
-                              followingUsers
-                                  .add(video['profile_id']);
-                            }
-                          });
-                        },
-                      ),
-              ],
-            ),
-
-            const SizedBox(height: 12),
-
-            // ================= DESCRIPTION =================
-            Text(
-              video['description'] ?? "",
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                height: 1.3,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ],
-        );
-      },
-    ),
-  );
-}
-
-  // ================================
-  // UI BUILDERS - MUSIC VINYL
-  // ================================
-
- Widget _buildMusicVinyl(Map video) {
-  final String? musicImage = video['music_image'];
-
-  return Positioned(
-    right: 16,
-    bottom: 40, 
-    child: GestureDetector(
-      onTap: () {},
-      child: SizedBox(
-        width: 60, 
-        height: 60,
-        child: AnimatedBuilder(
-          animation: _vinylController,
-          builder: (context, child) {
-            return Transform.rotate(
-              angle: _vinylController.value * math.pi * 2,
-              child: child,
-            );
-          },
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              // Vinyl Base
-              Container(
-                width: 50,
-                height: 50,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      Color(0xFF232323),
-                      Color(0xFF111111),
-                      Colors.black,
-                    ],
-                  ),
-                ),
-              ),
-
-              // Rings 
-              ...List.generate(4, (i) {
-                final size = 40.0 - (i * 6);
-                return Container(
-                  width: size,
-                  height: size,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.06),
-                    ),
-                  ),
-                );
-              }),
-
-              // Music Image
-              if (musicImage != null && musicImage.isNotEmpty)
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    image: DecorationImage(
-                      image: NetworkImage(musicImage),
-                      fit: BoxFit.cover,
-                    ),
-                  ),
-                )
-              else
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white.withOpacity(0.05),
-                  ),
-                  child: const Icon(
-                    Icons.music_note,
-                    color: Colors.white54,
-                    size: 18,
-                  ),
-                ),
-
-              // Center dot
-              Container(
-                width: 5,
-                height: 5,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withOpacity(0.95),
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
-    ),
-  );
-}
-}
+    );
 
-// ================================
-// GRADIENT OVERLAYS
-// ================================
+    if (confirmed != true) return;
+    try {
+      await Supabase.instance.client.from('posts').delete().eq('id', postId);
+      await loadVideos();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to delete')),
+        );
+      }
+    }
+  }
 
-/// Top gradient overlay for text readability
-class _TopGradientOverlay extends StatelessWidget {
-  const _TopGradientOverlay();
+  // ── Build ─────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: Container(
-          height: 180,
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                Colors.black54,
-                Colors.transparent,
-              ],
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          if (isLoading)
+            const Center(child: CircularProgressIndicator())
+          else if (videos.isEmpty)
+            const Center(
+              child: Text(
+                'No videos yet',
+                style: TextStyle(color: Colors.white),
+              ),
+            )
+          else
+            PageView.builder(
+              controller: _pageController,
+              scrollDirection: Axis.vertical,
+              itemCount: videos.length,
+              onPageChanged: (index) => setState(() {
+                _currentIndex = index;
+                _showLikeAnim = false;
+              }),
+              itemBuilder: (context, index) {
+                final video = videos[index];
+                final postId = video['id']?.toString() ?? '';
+                final ownerId = video['profile_id']?.toString() ?? '';
+                final isMe =
+                    ownerId == Supabase.instance.client.auth.currentUser!.id;
+                final isActive = index == _currentIndex;
+
+                return Stack(
+                  children: [
+                    VideoItem(
+                      file: video['media_url'],
+                      isActive: isActive,
+                      onDoubleTap: () => _handleDoubleTap(video),
+                    ),
+                    const AorisTopGradient(),
+                    const AorisBottomGradient(),
+                    Obx(() => DoubleTapLikeAnimation(
+                          visible: _showLikeAnim && isActive,
+                          color: _heartColorCtrl.color.value,
+                          onComplete: () =>
+                              setState(() => _showLikeAnim = false),
+                        )),
+                    AorisRightActions(
+                      video: video,
+                      isMe: isMe,
+                      isSaved: savedVideo.contains(postId),
+                      onToggleSave: () => setState(() {
+                        savedVideo.contains(postId)
+                            ? savedVideo.remove(postId)
+                            : savedVideo.add(postId);
+                      }),
+                      onShare: () => widget.onShare(video),
+                      onRepost: () {},
+                      onOpenComments: () =>
+                          openAorisComments(context, video['id']),
+                      onThreeDots: () => showAorisMenu(
+                        context: context,
+                        isMe: isMe,
+                        onDelete: () => _deletePost(video),
+                      ),
+                      getSharesCount: _getSharesCount,
+                    ),
+                    AorisBottomInfo(
+                      video: video,
+                      isMe: isMe,
+                    ),
+                    AorisMusicVinyl(video: video),
+                  ],
+                );
+              },
             ),
-          ),
-        ),
+          _buildTopBar(),
+        ],
       ),
     );
   }
-}
 
-
-
-/// Bottom gradient overlay for text readability
-class _BottomGradientOverlay extends StatelessWidget {
-  const _BottomGradientOverlay();
-
-  @override
-  Widget build(BuildContext context) {
-    return IgnorePointer(
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: Container(
-          height: 240,
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.bottomCenter,
-              end: Alignment.topCenter,
-              colors: [
-                Colors.black87,
-                Colors.transparent,
-              ],
+  Widget _buildTopBar() {
+    return Positioned(
+      top: MediaQuery.of(context).padding.top + 8,
+      left: 16,
+      right: 16,
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: refreshFeed,
+            child: const Icon(Icons.refresh, color: Colors.white, size: 26),
+          ),
+          const Spacer(),
+          const Text(
+            'Aoris',
+            style: TextStyle(
+              fontFamily: 'PacificoFont',
+              color: Colors.white,
+              fontSize: 20,
             ),
           ),
-        ),
+          const Spacer(),
+          GestureDetector(
+            onTap: () {},
+            child:
+                const Icon(Icons.tune_rounded, color: Colors.white, size: 26),
+          ),
+        ],
       ),
     );
   }
